@@ -80,9 +80,11 @@ fn xtwinops() {
     vt.process(
         b"\x1b[H\x1b[8;24;15tbbbbbbbbbbbbbbbbbbbb\x1b[8;24;80tcccccccccccccccccccc",
     );
-    assert_eq!(vt.screen().rows(0, 80).next().unwrap(), "bbbbbbbbbbbbbbb");
+    // With reflow, the wrapped line re-joins at the larger width: 20 b's
+    // overwrite the start of the line, then 20 c's are written at the cursor.
     assert_eq!(
-        vt.screen().rows(0, 80).nth(1).unwrap(),
-        "bbbbbcccccccccccccccccccc"
+        vt.screen().rows(0, 80).next().unwrap(),
+        "bbbbbbbbbbbbbbbbbbbbccccccccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
+    assert_eq!(vt.screen().rows(0, 80).nth(1).unwrap(), "aaaaaaaaaa");
 }
