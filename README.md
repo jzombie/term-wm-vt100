@@ -1,4 +1,6 @@
-# vt100
+# term-wm-vt100
+
+_A fork of [vt100](https://crates.io/crates/vt100) specifically for usage in [term-wm](https://crates.io/crates/term-wm)._
 
 This crate parses a terminal byte stream and provides an in-memory
 representation of the rendered contents.
