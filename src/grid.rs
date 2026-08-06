@@ -63,11 +63,15 @@ impl Grid {
         self.size
     }
 
-    pub fn set_size(&mut self, size: Size) {
-        if size.cols != self.size.cols {
-            for row in &mut self.rows {
-                row.wrap(false);
-            }
+    /// Resizes the grid. When `reflow` is true and the number of columns
+    /// changes, soft-wrapped lines in the scrollback and visible area are
+    /// re-chunked to the new width so no content is truncated. The legacy
+    /// truncate/pad behavior is used for the alternate screen grid (which is
+    /// laid out by absolute cursor addressing and repainted on SIGWINCH).
+    pub fn set_size(&mut self, size: Size, reflow: bool) {
+        if reflow && size.cols != self.size.cols {
+            self.reflow(size);
+            return;
         }
 
         if self.scroll_bottom == self.size.rows - 1 {
@@ -97,6 +101,357 @@ impl Grid {
         if self.saved_pos.col > self.size.cols - 1 {
             self.saved_pos.col = self.size.cols - 1;
         }
+    }
+
+    /// Reflows all content (scrollback + visible rows) to a new size when the
+    /// width changes, then remaps the cursor, saved cursor position, and the
+    /// scrollback viewport anchor.
+    fn reflow(&mut self, new_size: Size) {
+        let old_cols = self.size.cols;
+        let old_rows = self.size.rows;
+        let new_cols = new_size.cols;
+        let new_rows = usize::from(new_size.rows);
+        let sb_cap = self.scrollback_len;
+
+        let old_pos = self.pos;
+        let old_saved_pos = self.saved_pos;
+        let old_scrollback_offset = self.scrollback_offset;
+        let old_sb_len = self.scrollback.len();
+
+        self.size = new_size;
+
+        // Move the grid out so we can read it while rebuilding.
+        let sb_rows = std::mem::take(&mut self.scrollback);
+        let vis_rows = std::mem::take(&mut self.rows);
+        let all_len = sb_rows.len() + vis_rows.len();
+
+        // Anchors to remap through the reflow. The cursor anchors the
+        // reassembly: when following the tail, rows below the cursor line are
+        // dropped as filler and the oldest rows above are evicted to fit the
+        // new height, keeping the cursor line visible. Rows without content
+        // map to their reflowed line index (equivalent to the legacy clamped
+        // position on empty screens); rows with content are mapped through the
+        // reflow so the cursor follows its cell.
+        let cursor_g = (old_sb_len + usize::from(old_pos.row)).min(all_len.saturating_sub(1));
+        let cursor_col = old_pos.col;
+        let cursor_pending = old_pos.col == old_cols;
+        let cursor_row_blank = grid_row_is_blank(grid_row_at(&sb_rows, &vis_rows, cursor_g));
+        let saved_g = (old_sb_len + usize::from(old_saved_pos.row)).min(all_len.saturating_sub(1));
+        let saved_col = old_saved_pos.col;
+        let saved_row_blank = grid_row_is_blank(grid_row_at(&sb_rows, &vis_rows, saved_g));
+        let viewport_anchor = if old_scrollback_offset > 0 {
+            Some(old_sb_len.saturating_sub(old_scrollback_offset).min(all_len.saturating_sub(1)))
+        } else {
+            None
+        };
+
+        // Group rows into logical lines: a row continues the previous line
+        // when it is soft-wrapped, or when a wide character was pushed to the
+        // next row leaving a blank last column (vt100 does not set the wrap
+        // flag in that case).
+        let mut line_starts: Vec<usize> = Vec::new();
+        {
+            let mut prev_last_empty = false;
+            for g in 0..all_len {
+                if g == 0 {
+                    line_starts.push(0);
+                } else {
+                    let continuation = {
+                        let prev = grid_row_at(&sb_rows, &vis_rows, g - 1);
+                        let cur = grid_row_at(&sb_rows, &vis_rows, g);
+                        prev.wrapped()
+                            || (prev_last_empty && cur.get(0).is_some_and(crate::Cell::is_wide))
+                    };
+                    if !continuation {
+                        line_starts.push(g);
+                    }
+                }
+                let row = grid_row_at(&sb_rows, &vis_rows, g);
+                prev_last_empty = row
+                    .get(row.cols().saturating_sub(1))
+                    .is_some_and(|c| !c.has_contents());
+            }
+        }
+
+        let mut all_new: Vec<crate::row::Row> = Vec::new();
+        let mut cursor_res: Option<(usize, u16)> = None;
+        let mut saved_res: Option<(usize, u16)> = None;
+        let mut viewport_res: Option<(usize, u16)> = None;
+        let mut cursor_line_end: Option<usize> = None;
+
+        for (li, &start) in line_starts.iter().enumerate() {
+            let end = line_starts.get(li + 1).copied().unwrap_or(all_len);
+            let line_start_in_all = all_new.len();
+
+            // Flatten the logical line into a stream of written cells. Wide
+            // continuation cells are skipped and trailing unwritten padding is
+            // dropped, except for the cursor row which keeps blank cells up to
+            // the cursor column so its position survives the reflow.
+            let mut cells: Vec<crate::Cell> = Vec::new();
+            let mut src: Vec<(usize, u16)> = Vec::new();
+            for g in start..end {
+                let row = grid_row_at(&sb_rows, &vis_rows, g);
+                let cols = row.cols();
+                let mut last_written: u16 = 0;
+                for c in 0..cols {
+                    if row.get(c).is_some_and(crate::Cell::has_contents) {
+                        last_written = c + 1;
+                    }
+                }
+                let mut row_end = last_written;
+                if g == cursor_g
+                    && !cursor_row_blank
+                    && cursor_col < old_cols
+                    && cursor_col + 1 > row_end
+                {
+                    row_end = cursor_col + 1;
+                }
+                if row_end > cols {
+                    row_end = cols;
+                }
+                for c in 0..row_end {
+                    if let Some(ce) = row.get(c) {
+                        if ce.is_wide_continuation() {
+                            continue;
+                        }
+                        cells.push(ce.clone());
+                        src.push((g, c));
+                    }
+                }
+            }
+
+            // Re-wrap the stream at the new width.
+            let (mut rws, widths) = Self::reflow_rows(&cells, new_cols);
+            for rw in &mut rws {
+                rw.pad(new_cols);
+            }
+
+            if cursor_g >= start && cursor_g < end {
+                if cursor_row_blank {
+                    cursor_res = Some((line_start_in_all, cursor_col.min(new_cols)));
+                } else {
+                    let target = Self::reflow_forward(&cells, &src, cursor_g, cursor_col);
+                    let (lr, lc) = Self::reflow_reverse(&widths, target, &rws, new_cols);
+                    cursor_res = Some((line_start_in_all + lr, lc));
+                }
+                cursor_line_end = Some(line_start_in_all + rws.len());
+            }
+            if saved_g >= start && saved_g < end {
+                if saved_row_blank {
+                    saved_res = Some((line_start_in_all, saved_col.min(new_cols)));
+                } else {
+                    let target = Self::reflow_forward(&cells, &src, saved_g, saved_col);
+                    let (lr, lc) = Self::reflow_reverse(&widths, target, &rws, new_cols);
+                    saved_res = Some((line_start_in_all + lr, lc));
+                }
+            }
+            if let Some(vg) = viewport_anchor {
+                if vg >= start && vg < end {
+                    let target = Self::reflow_forward(&cells, &src, vg, 0);
+                    let (lr, lc) = Self::reflow_reverse(&widths, target, &rws, new_cols);
+                    viewport_res = Some((line_start_in_all + lr, lc));
+                }
+            }
+
+            all_new.extend(rws);
+        }
+
+        let cap_total = sb_cap + new_rows;
+
+        // When following the tail, drop rows below the end of the cursor's
+        // logical line (filler or content scrolled off by the height change) so
+        // empty trailing rows never force real content to be evicted, while
+        // keeping the cursor's own wrapped line intact.
+        if old_scrollback_offset == 0 {
+            if let Some(cle) = cursor_line_end {
+                if cle < all_new.len() {
+                    all_new.truncate(cle);
+                }
+            }
+        }
+
+        // Evict the oldest lines when the reflowed content exceeds capacity.
+        let evict = all_new.len().saturating_sub(cap_total);
+        if evict > 0 {
+            all_new.drain(..evict);
+        }
+
+        let hold = all_new.len().saturating_sub(new_rows);
+
+        // Resolve an anchor's post-eviction global row, or None if it was
+        // evicted from the buffer entirely.
+        let resolve = |pre: Option<(usize, u16)>| -> Option<(usize, u16)> {
+            let (g, c) = pre?;
+            if g >= evict && g - evict < all_new.len() {
+                Some((g - evict, c))
+            } else {
+                None
+            }
+        };
+
+        let new_offset = if old_scrollback_offset == 0 {
+            // Tail-follow: stay at the bottom of the reflowed content.
+            0
+        } else {
+            // Preserve the previously visible top line; fall back to the top
+            // of the remaining scrollback if it was evicted.
+            match resolve(viewport_res) {
+                Some((vg, _)) => hold.saturating_sub(vg).min(hold).min(sb_cap),
+                None => hold.min(sb_cap),
+            }
+        };
+        self.scrollback_offset = new_offset.min(hold).min(sb_cap);
+
+        let first_visible = hold.saturating_sub(self.scrollback_offset);
+
+        // Resolve the cursor to a drawing position. Blank rows map to their
+        // line index (legacy clamp equivalent); content rows are anchored
+        // through the reflow.
+        let (cursor_draw_row, cursor_draw_col) = match resolve(cursor_res) {
+            Some((cg, cc)) => {
+                let draw = cg
+                    .saturating_sub(first_visible)
+                    .min(new_rows.saturating_sub(1));
+                (draw, cc)
+            }
+            None => (
+                new_rows.saturating_sub(1),
+                new_cols.saturating_sub(1),
+            ),
+        };
+
+        if cursor_pending && !cursor_row_blank && cursor_draw_col == new_cols {
+            self.pos = crate::grid::Pos {
+                row: cursor_draw_row.try_into().unwrap(),
+                col: new_cols,
+            };
+        } else {
+            self.pos = crate::grid::Pos {
+                row: cursor_draw_row.try_into().unwrap(),
+                col: cursor_draw_col.min(new_cols.saturating_sub(1)),
+            };
+        }
+
+        match resolve(saved_res) {
+            Some((sg, sc)) => {
+                let draw = sg
+                    .saturating_sub(first_visible)
+                    .min(new_rows.saturating_sub(1));
+                self.saved_pos = crate::grid::Pos {
+                    row: draw.try_into().unwrap(),
+                    col: sc.min(new_cols.saturating_sub(1)),
+                };
+            }
+            None => {
+                // The saved position's line was dropped during reflow; fall
+                // back to the legacy clamped position within the new bounds.
+                self.saved_pos = crate::grid::Pos {
+                    row: usize::from(old_saved_pos.row)
+                        .min(new_rows.saturating_sub(1))
+                        .try_into()
+                        .unwrap(),
+                    col: old_saved_pos.col.min(new_cols.saturating_sub(1)),
+                };
+            }
+        }
+
+        // Reassemble the scrollback and visible rows.
+        self.scrollback = all_new[..hold].to_vec().into();
+        self.rows = all_new[hold..].to_vec();
+        while self.rows.len() < new_rows {
+            self.rows.push(crate::row::Row::new(new_cols));
+        }
+
+        // Keep the legacy scroll-region adjustment semantics on resize: the
+        // bottom margin that reached the old bottom edge is extended to the new
+        // height (compare against the old size, set before `self.size` was
+        // overwritten).
+        if self.scroll_bottom == old_rows.saturating_sub(1) {
+            self.scroll_bottom = new_size.rows.saturating_sub(1);
+        }
+        if self.scroll_bottom >= new_size.rows {
+            self.scroll_bottom = new_size.rows.saturating_sub(1);
+        }
+        if self.scroll_bottom < self.scroll_top {
+            self.scroll_top = 0;
+        }
+    }
+
+    /// Flattens a logical line's cells into rows of `new_cols` columns,
+    /// returning the rows and each row's content width (in columns). Wide
+    /// characters are never split across a row boundary.
+    fn reflow_rows(cells: &[crate::Cell], new_cols: u16) -> (Vec<crate::row::Row>, Vec<u16>) {
+        if cells.is_empty() {
+            return (vec![crate::row::Row::new(new_cols)], vec![0]);
+        }
+        let mut rows: Vec<crate::row::Row> = Vec::new();
+        let mut widths: Vec<u16> = Vec::new();
+        let mut cur: Vec<crate::Cell> = Vec::new();
+        let mut cur_w: u16 = 0;
+        for (i, cell) in cells.iter().enumerate() {
+            let w = if cell.is_wide() { 2 } else { 1 };
+            if cur_w + w > new_cols && !cur.is_empty() {
+                rows.push(crate::row::Row::from_cells(std::mem::take(&mut cur), true));
+                widths.push(cur_w);
+                cur_w = 0;
+            }
+            cur.push(cell.clone());
+            cur_w += w;
+            if cell.is_wide() {
+                let mut cont = cell.clone();
+                cont.clear(*cell.attrs());
+                cont.set_wide_continuation(true);
+                cur.push(cont);
+            }
+            if i + 1 == cells.len() {
+                rows.push(crate::row::Row::from_cells(std::mem::take(&mut cur), false));
+                widths.push(cur_w);
+            }
+        }
+        (rows, widths)
+    }
+
+    /// Sums the stream width (wide = 2, standard = 1) of every cell strictly
+    /// before the position `(target_row, target_col)` in reading order. The
+    /// stream excludes wide-continuation cells and trailing padding, so a
+    /// cursor resting on a stripped wrap-pad lands on the pushed wide
+    /// character that follows it.
+    fn reflow_forward(cells: &[crate::Cell], src: &[(usize, u16)], target_row: usize, target_col: u16) -> usize {
+        let mut acc = 0usize;
+        for (k, &(sg, sc)) in src.iter().enumerate() {
+            if sg < target_row || (sg == target_row && sc < target_col) {
+                acc += if cells[k].is_wide() { 2 } else { 1 };
+            } else {
+                break;
+            }
+        }
+        acc
+    }
+
+    /// Maps a stream index back to a `(row, col)` in the re-wrapped rows,
+    /// walking each row's actual content width (rows can be shorter than
+    /// `new_cols` when a wide character early-wraps). Clamps to the leading
+    /// cell of a wide character if the index lands on its continuation.
+    fn reflow_reverse(
+        widths: &[u16],
+        target: usize,
+        rws: &[crate::row::Row],
+        new_cols: u16,
+    ) -> (usize, u16) {
+        let mut acc = 0usize;
+        for (i, &w) in widths.iter().enumerate() {
+            let w = usize::from(w);
+            if target < acc + w {
+                let mut col = u16::try_from(target - acc).unwrap();
+                if col < new_cols && rws[i].get(col).is_some_and(crate::Cell::is_wide_continuation) {
+                    col = col.saturating_sub(1);
+                }
+                return (i, col);
+            }
+            acc += w;
+        }
+        let i = widths.len().saturating_sub(1);
+        (i, widths[i])
     }
 
     pub fn pos(&self) -> Pos {
@@ -727,6 +1082,26 @@ impl Grid {
             self.pos.col = self.size.cols - 1;
         }
     }
+}
+
+/// Returns the display-ordered row at global index `g` from the scrollback
+/// (oldest first) followed by the visible rows. Used while rebuilding the grid
+/// during reflow.
+fn grid_row_at<'a>(
+    sb_rows: &'a std::collections::VecDeque<crate::row::Row>,
+    vis_rows: &'a [crate::row::Row],
+    g: usize,
+) -> &'a crate::row::Row {
+    if g < sb_rows.len() {
+        &sb_rows[g]
+    } else {
+        &vis_rows[g - sb_rows.len()]
+    }
+}
+
+/// Returns whether a row contains no written cells (only unwritten padding).
+fn grid_row_is_blank(row: &crate::row::Row) -> bool {
+    (0..row.cols()).all(|c| row.get(c).is_some_and(|ce| !ce.has_contents()))
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

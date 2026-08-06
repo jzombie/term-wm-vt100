@@ -49,11 +49,12 @@ fn set_size() {
     parser.process(b"\x1bc01234567890123456789");
     assert_eq!(parser.screen().contents(), "01234567890123456789");
 
+    // With reflow, growing the width re-joins the previously wrapped line and
+    // shrinking it back re-wraps it, preserving the logical content.
     parser.screen_mut().set_size(24, 80);
-    assert_eq!(parser.screen().contents(), "01234567\n89012345\n6789");
-
+    assert_eq!(parser.screen().contents(), "01234567890123456789");
     parser.screen_mut().set_size(34, 8);
-    assert_eq!(parser.screen().contents(), "01234567\n89012345\n6789");
+    assert_eq!(parser.screen().contents(), "01234567890123456789");
 
     let mut parser = vt100::Parser::default();
     assert_eq!(parser.screen().size(), (24, 80));
