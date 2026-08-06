@@ -37,7 +37,7 @@ fn main() {
     stdout.write_all(b"\x1b[H\x1b[J").unwrap();
     stdout.flush().unwrap();
 
-    let mut parser = vt100::Parser::new(size.0, size.1, 0);
+    let mut parser = term_wm_vt100::Parser::new(size.0, size.1, 0);
     let mut buf = [0u8; 4096];
     let mut screen = parser.screen().clone();
     let mut idx = 0;

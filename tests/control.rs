@@ -6,14 +6,14 @@ fn bel() {
         bel: usize,
     }
 
-    impl vt100::Callbacks for State {
-        fn audible_bell(&mut self, _: &mut vt100::Screen) {
+    impl term_wm_vt100::Callbacks for State {
+        fn audible_bell(&mut self, _: &mut term_wm_vt100::Screen) {
             self.bel += 1;
         }
     }
 
     let mut parser =
-        vt100::Parser::new_with_callbacks(24, 80, 0, State { bel: 0 });
+        term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, State { bel: 0 });
     assert_eq!(parser.callbacks().bel, 0);
 
     let screen = parser.screen().clone();

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.2-patch1] - 2026-08-06
+
+[term-wm-vt100 fork]
+
+### Added
+
+* Add line reflow on resize for the main screen grid.
+
 ## [0.16.2] - 2025-07-11
 
 ### Fixed
