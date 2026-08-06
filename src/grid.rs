@@ -132,15 +132,23 @@ impl Grid {
         // map to their reflowed line index (equivalent to the legacy clamped
         // position on empty screens); rows with content are mapped through the
         // reflow so the cursor follows its cell.
-        let cursor_g = (old_sb_len + usize::from(old_pos.row)).min(all_len.saturating_sub(1));
+        let cursor_g = (old_sb_len + usize::from(old_pos.row))
+            .min(all_len.saturating_sub(1));
         let cursor_col = old_pos.col;
         let cursor_pending = old_pos.col == old_cols;
-        let cursor_row_blank = grid_row_is_blank(grid_row_at(&sb_rows, &vis_rows, cursor_g));
-        let saved_g = (old_sb_len + usize::from(old_saved_pos.row)).min(all_len.saturating_sub(1));
+        let cursor_row_blank =
+            grid_row_is_blank(grid_row_at(&sb_rows, &vis_rows, cursor_g));
+        let saved_g = (old_sb_len + usize::from(old_saved_pos.row))
+            .min(all_len.saturating_sub(1));
         let saved_col = old_saved_pos.col;
-        let saved_row_blank = grid_row_is_blank(grid_row_at(&sb_rows, &vis_rows, saved_g));
+        let saved_row_blank =
+            grid_row_is_blank(grid_row_at(&sb_rows, &vis_rows, saved_g));
         let viewport_anchor = if old_scrollback_offset > 0 {
-            Some(old_sb_len.saturating_sub(old_scrollback_offset).min(all_len.saturating_sub(1)))
+            Some(
+                old_sb_len
+                    .saturating_sub(old_scrollback_offset)
+                    .min(all_len.saturating_sub(1)),
+            )
         } else {
             None
         };
@@ -160,7 +168,10 @@ impl Grid {
                         let prev = grid_row_at(&sb_rows, &vis_rows, g - 1);
                         let cur = grid_row_at(&sb_rows, &vis_rows, g);
                         prev.wrapped()
-                            || (prev_last_empty && cur.get(0).is_some_and(crate::Cell::is_wide))
+                            || (prev_last_empty
+                                && cur
+                                    .get(0)
+                                    .is_some_and(crate::Cell::is_wide))
                     };
                     if !continuation {
                         line_starts.push(g);
@@ -198,7 +209,9 @@ impl Grid {
                 let mut last_meaningful: u16 = 0;
                 for c in 0..cols {
                     if let Some(ce) = row.get(c) {
-                        if ce.has_contents() || ce.attrs() != &crate::attrs::Attrs::default() {
+                        if ce.has_contents()
+                            || ce.attrs() != &crate::attrs::Attrs::default()
+                        {
                             last_meaningful = c + 1;
                         }
                     }
@@ -233,27 +246,36 @@ impl Grid {
 
             if cursor_g >= start && cursor_g < end {
                 if cursor_row_blank {
-                    cursor_res = Some((line_start_in_all, cursor_col.min(new_cols)));
+                    cursor_res =
+                        Some((line_start_in_all, cursor_col.min(new_cols)));
                 } else {
-                    let target = Self::reflow_forward(&cells, &src, cursor_g, cursor_col);
-                    let (lr, lc) = Self::reflow_reverse(&widths, target, &rws, new_cols);
+                    let target = Self::reflow_forward(
+                        &cells, &src, cursor_g, cursor_col,
+                    );
+                    let (lr, lc) =
+                        Self::reflow_reverse(&widths, target, &rws, new_cols);
                     cursor_res = Some((line_start_in_all + lr, lc));
                 }
                 cursor_line_end = Some(line_start_in_all + rws.len());
             }
             if saved_g >= start && saved_g < end {
                 if saved_row_blank {
-                    saved_res = Some((line_start_in_all, saved_col.min(new_cols)));
+                    saved_res =
+                        Some((line_start_in_all, saved_col.min(new_cols)));
                 } else {
-                    let target = Self::reflow_forward(&cells, &src, saved_g, saved_col);
-                    let (lr, lc) = Self::reflow_reverse(&widths, target, &rws, new_cols);
+                    let target = Self::reflow_forward(
+                        &cells, &src, saved_g, saved_col,
+                    );
+                    let (lr, lc) =
+                        Self::reflow_reverse(&widths, target, &rws, new_cols);
                     saved_res = Some((line_start_in_all + lr, lc));
                 }
             }
             if let Some(vg) = viewport_anchor {
                 if vg >= start && vg < end {
                     let target = Self::reflow_forward(&cells, &src, vg, 0);
-                    let (lr, lc) = Self::reflow_reverse(&widths, target, &rws, new_cols);
+                    let (lr, lc) =
+                        Self::reflow_reverse(&widths, target, &rws, new_cols);
                     viewport_res = Some((line_start_in_all + lr, lc));
                 }
             }
@@ -301,7 +323,9 @@ impl Grid {
             // Preserve the previously visible top line; fall back to the top
             // of the remaining scrollback if it was evicted.
             match resolve(viewport_res) {
-                Some((vg, _)) => hold.saturating_sub(vg).min(hold).min(sb_cap),
+                Some((vg, _)) => {
+                    hold.saturating_sub(vg).min(hold).min(sb_cap)
+                }
                 None => hold.min(sb_cap),
             }
         };
@@ -319,13 +343,11 @@ impl Grid {
                     .min(new_rows.saturating_sub(1));
                 (draw, cc)
             }
-            None => (
-                new_rows.saturating_sub(1),
-                new_cols.saturating_sub(1),
-            ),
+            None => (new_rows.saturating_sub(1), new_cols.saturating_sub(1)),
         };
 
-        if cursor_pending && !cursor_row_blank && cursor_draw_col == new_cols {
+        if cursor_pending && !cursor_row_blank && cursor_draw_col == new_cols
+        {
             self.pos = crate::grid::Pos {
                 row: cursor_draw_row.try_into().unwrap(),
                 col: new_cols,
@@ -385,7 +407,10 @@ impl Grid {
     /// Flattens a logical line's cells into rows of `new_cols` columns,
     /// returning the rows and each row's content width (in columns). Wide
     /// characters are never split across a row boundary.
-    fn reflow_rows(cells: &[crate::Cell], new_cols: u16) -> (Vec<crate::row::Row>, Vec<u16>) {
+    fn reflow_rows(
+        cells: &[crate::Cell],
+        new_cols: u16,
+    ) -> (Vec<crate::row::Row>, Vec<u16>) {
         if cells.is_empty() {
             return (vec![crate::row::Row::new(new_cols)], vec![0]);
         }
@@ -396,7 +421,10 @@ impl Grid {
         for (i, cell) in cells.iter().enumerate() {
             let w = if cell.is_wide() { 2 } else { 1 };
             if cur_w + w > new_cols && !cur.is_empty() {
-                rows.push(crate::row::Row::from_cells(std::mem::take(&mut cur), true));
+                rows.push(crate::row::Row::from_cells(
+                    std::mem::take(&mut cur),
+                    true,
+                ));
                 widths.push(cur_w);
                 cur_w = 0;
             }
@@ -409,7 +437,10 @@ impl Grid {
                 cur.push(cont);
             }
             if i + 1 == cells.len() {
-                rows.push(crate::row::Row::from_cells(std::mem::take(&mut cur), false));
+                rows.push(crate::row::Row::from_cells(
+                    std::mem::take(&mut cur),
+                    false,
+                ));
                 widths.push(cur_w);
             }
         }
@@ -421,7 +452,12 @@ impl Grid {
     /// stream excludes wide-continuation cells and trailing padding, so a
     /// cursor resting on a stripped wrap-pad lands on the pushed wide
     /// character that follows it.
-    fn reflow_forward(cells: &[crate::Cell], src: &[(usize, u16)], target_row: usize, target_col: u16) -> usize {
+    fn reflow_forward(
+        cells: &[crate::Cell],
+        src: &[(usize, u16)],
+        target_row: usize,
+        target_col: u16,
+    ) -> usize {
         let mut acc = 0usize;
         for (k, &(sg, sc)) in src.iter().enumerate() {
             if sg < target_row || (sg == target_row && sc < target_col) {
@@ -448,7 +484,11 @@ impl Grid {
             let w = usize::from(w);
             if target < acc + w {
                 let mut col = u16::try_from(target - acc).unwrap();
-                if col < new_cols && rws[i].get(col).is_some_and(crate::Cell::is_wide_continuation) {
+                if col < new_cols
+                    && rws[i]
+                        .get(col)
+                        .is_some_and(crate::Cell::is_wide_continuation)
+                {
                     col = col.saturating_sub(1);
                 }
                 return (i, col);

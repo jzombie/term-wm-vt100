@@ -5,7 +5,9 @@
 /// Counts every character written to the grid (cell contents only; unwritten
 /// padding cells are skipped) across the whole scrollback + visible content.
 /// Reflow must preserve this multiset exactly.
-fn char_multiset(p: &mut vt100::Parser) -> std::collections::BTreeMap<char, usize> {
+fn char_multiset(
+    p: &mut vt100::Parser,
+) -> std::collections::BTreeMap<char, usize> {
     let (rows, cols) = p.screen().size();
     let orig_sb = p.screen().scrollback();
     let mut map = std::collections::BTreeMap::new();
@@ -13,15 +15,18 @@ fn char_multiset(p: &mut vt100::Parser) -> std::collections::BTreeMap<char, usiz
         p.screen_mut().set_scrollback(usize::MAX);
         p.screen().scrollback()
     };
-    let add_row = |p: &vt100::Parser, r: u16, map: &mut std::collections::BTreeMap<char, usize>| {
-        for c in 0..cols {
-            if let Some(cell) = p.screen().cell(r, c) {
-                for ch in cell.contents().chars() {
-                    *map.entry(ch).or_insert(0) += 1;
+    let add_row =
+        |p: &vt100::Parser,
+         r: u16,
+         map: &mut std::collections::BTreeMap<char, usize>| {
+            for c in 0..cols {
+                if let Some(cell) = p.screen().cell(r, c) {
+                    for ch in cell.contents().chars() {
+                        *map.entry(ch).or_insert(0) += 1;
+                    }
                 }
             }
-        }
-    };
+        };
     // read each scrollback row once (at offset `sb_len - i` it is the first
     // row of the visible window)
     for i in 0..sb_len {
@@ -41,7 +46,10 @@ fn char_multiset(p: &mut vt100::Parser) -> std::collections::BTreeMap<char, usiz
 fn shrink_rewraps_wrapped_visible_content_without_loss() {
     let mut p = vt100::Parser::new(3, 20, 0);
     p.process(b"0123456789012345678901234"); // 25 chars -> 2 rows at 20 cols
-    assert_eq!(p.screen().rows(0, 20).next().unwrap(), "01234567890123456789");
+    assert_eq!(
+        p.screen().rows(0, 20).next().unwrap(),
+        "01234567890123456789"
+    );
     assert_eq!(p.screen().rows(0, 20).nth(1).unwrap(), "01234");
 
     p.screen_mut().set_size(3, 10);
@@ -133,11 +141,20 @@ fn background_only_regions_keep_their_color() {
     // no contents. Reflow must keep those cells so the background survives.
     let mut p = vt100::Parser::new(5, 80, 0);
     p.process(b"hello\x1b[44m\x1b[2;1H\x1b[K");
-    assert_eq!(p.screen().cell(1, 0).unwrap().bgcolor(), vt100::Color::Idx(4));
+    assert_eq!(
+        p.screen().cell(1, 0).unwrap().bgcolor(),
+        vt100::Color::Idx(4)
+    );
     p.screen_mut().set_size(5, 40);
-    assert_eq!(p.screen().cell(1, 0).unwrap().bgcolor(), vt100::Color::Idx(4));
+    assert_eq!(
+        p.screen().cell(1, 0).unwrap().bgcolor(),
+        vt100::Color::Idx(4)
+    );
     p.screen_mut().set_size(5, 80);
-    assert_eq!(p.screen().cell(1, 0).unwrap().bgcolor(), vt100::Color::Idx(4));
+    assert_eq!(
+        p.screen().cell(1, 0).unwrap().bgcolor(),
+        vt100::Color::Idx(4)
+    );
 
     // Background-colored spaces also survive.
     let mut q = vt100::Parser::new(5, 80, 0);
@@ -146,7 +163,10 @@ fn background_only_regions_keep_their_color() {
         q.process(b" ");
     }
     q.screen_mut().set_size(5, 40);
-    assert_eq!(q.screen().cell(0, 20).unwrap().bgcolor(), vt100::Color::Idx(4));
+    assert_eq!(
+        q.screen().cell(0, 20).unwrap().bgcolor(),
+        vt100::Color::Idx(4)
+    );
 }
 
 #[test]
@@ -187,7 +207,7 @@ fn saved_cursor_restores_same_cell_after_reflow() {
     p.process(b"0123456789\x1b7abcde"); // DECSC at (0, 10), then cursor at (0, 15)
     p.screen_mut().set_size(5, 8);
     p.process(b"\x1b8"); // DECRC
-    // saved pos at stream index 10 -> "01234567" / "89abcde" -> (1, 2)
+                         // saved pos at stream index 10 -> "01234567" / "89abcde" -> (1, 2)
     assert_eq!(p.screen().cursor_position(), (1, 2));
 }
 
@@ -214,7 +234,10 @@ fn scrolled_up_viewport_stays_anchored() {
     assert!(offset_before > 0);
     p.screen_mut().set_size(3, 8);
     // reflow must preserve a scrolled-back viewport (non-zero offset)
-    assert!(p.screen().scrollback() > 0, "scrolled-up viewport must survive reflow");
+    assert!(
+        p.screen().scrollback() > 0,
+        "scrolled-up viewport must survive reflow"
+    );
 }
 
 #[test]
@@ -235,4 +258,36 @@ fn cursor_preceded_by_wide_char_maps_correctly() {
     // content re-wraps; the wide char is at cols 0-1, so the cursor (7) is in
     // the same row after the wide char
     assert_eq!(p.screen().cursor_position(), (0, 7));
+}
+
+#[test]
+fn test_zsh_sigwinch_prompt_duplication_behavior() {
+    // 1. Initialize grid at width 40 with history and a wide prompt
+    let mut parser = vt100::Parser::new(10, 40, 0);
+    parser.process(b"ls -la\r\nsamply.json  src  target  tests  vendor\r\nadministrator@d17-4 term-wm % ");
+
+    // 2. Shrink grid to width 20 via screen_mut()
+    parser.screen_mut().set_size(10, 20);
+
+    // 3. Feed zsh's exact SIGWINCH response: \r, \x1b[J, new prompt
+    parser.process(b"\r\x1b[Jadministrator@d17-4 term-wm % ");
+
+    let contents = parser.screen().contents();
+
+    // Verification 1: Zero Data Loss (historical output intact)
+    assert!(
+        contents.contains("samply.json"),
+        "Historical command output must not be deleted on reflow:\n{}",
+        contents
+    );
+
+    // Verification 2: Expected Duplicate Prompt Fragment
+    // Because \x1b[J only erases downward from the cursor line,
+    // the top fragment of the soft-wrapped prompt survives above the cursor.
+    let prompt_occurrences = contents.matches("administrator@d17-4").count();
+    assert_eq!(
+        prompt_occurrences, 2,
+        "Expected prompt fragment duplication from zsh erase-down behavior:\n{}",
+        contents
+    );
 }
