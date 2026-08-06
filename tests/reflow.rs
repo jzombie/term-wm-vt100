@@ -6,7 +6,7 @@
 /// padding cells are skipped) across the whole scrollback + visible content.
 /// Reflow must preserve this multiset exactly.
 fn char_multiset(
-    p: &mut vt100::Parser,
+    p: &mut term_wm_vt100::Parser,
 ) -> std::collections::BTreeMap<char, usize> {
     let (rows, cols) = p.screen().size();
     let orig_sb = p.screen().scrollback();
@@ -16,7 +16,7 @@ fn char_multiset(
         p.screen().scrollback()
     };
     let add_row =
-        |p: &vt100::Parser,
+        |p: &term_wm_vt100::Parser,
          r: u16,
          map: &mut std::collections::BTreeMap<char, usize>| {
             for c in 0..cols {
@@ -44,7 +44,7 @@ fn char_multiset(
 
 #[test]
 fn shrink_rewraps_wrapped_visible_content_without_loss() {
-    let mut p = vt100::Parser::new(3, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(3, 20, 0);
     p.process(b"0123456789012345678901234"); // 25 chars -> 2 rows at 20 cols
     assert_eq!(
         p.screen().rows(0, 20).next().unwrap(),
@@ -69,7 +69,7 @@ fn shrink_rewraps_wrapped_visible_content_without_loss() {
 
 #[test]
 fn grow_rejoins_previously_wrapped_lines() {
-    let mut p = vt100::Parser::new(3, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(3, 20, 0);
     p.process(b"0123456789012345678901234"); // 25 chars at 20 cols
     p.screen_mut().set_size(3, 10);
     p.screen_mut().set_size(3, 20);
@@ -84,7 +84,7 @@ fn grow_rejoins_previously_wrapped_lines() {
 fn reflow_preserves_scrollback_content() {
     // scrollback budget large enough to hold the re-wrapped rows so no
     // content is evicted; the character multiset must survive shrink+grow.
-    let mut p = vt100::Parser::new(3, 20, 30);
+    let mut p = term_wm_vt100::Parser::new(3, 20, 30);
     for i in 0..6u32 {
         p.process(format!("line {i}: {}\r\n", "a".repeat(12)).as_bytes());
     }
@@ -99,7 +99,7 @@ fn reflow_preserves_scrollback_content() {
 
 #[test]
 fn wide_chars_are_not_split_across_rows() {
-    let mut p = vt100::Parser::new(3, 6, 0);
+    let mut p = term_wm_vt100::Parser::new(3, 6, 0);
     p.process("あああ".as_bytes()); // 3 wide chars = 6 columns
     assert_eq!(p.screen().contents(), "あああ");
 
@@ -115,21 +115,21 @@ fn wide_chars_are_not_split_across_rows() {
 
 #[test]
 fn wide_char_continuation_keeps_sgr_attrs() {
-    let mut p = vt100::Parser::new(3, 6, 0);
+    let mut p = term_wm_vt100::Parser::new(3, 6, 0);
     p.process("\x1b[31mあ\x1b[0m".as_bytes()); // red wide char at col 0
     p.screen_mut().set_size(3, 2);
     // the wide char re-wraps to row 0, cols 0-1; the continuation cell (col 1)
     // must inherit the red foreground of the lead cell.
     let lead = p.screen().cell(0, 0).unwrap();
     let cont = p.screen().cell(0, 1).unwrap();
-    assert_eq!(lead.fgcolor(), vt100::Color::Idx(1));
-    assert_eq!(cont.fgcolor(), vt100::Color::Idx(1));
+    assert_eq!(lead.fgcolor(), term_wm_vt100::Color::Idx(1));
+    assert_eq!(cont.fgcolor(), term_wm_vt100::Color::Idx(1));
     assert!(cont.is_wide_continuation());
 }
 
 #[test]
 fn explicit_trailing_spaces_are_preserved() {
-    let mut p = vt100::Parser::new(3, 10, 0);
+    let mut p = term_wm_vt100::Parser::new(3, 10, 0);
     p.process(b"foo   "); // explicit trailing spaces
     p.screen_mut().set_size(3, 20);
     assert_eq!(p.screen().rows(0, 20).next().unwrap(), "foo   ");
@@ -139,25 +139,25 @@ fn explicit_trailing_spaces_are_preserved() {
 fn background_only_regions_keep_their_color() {
     // A region painted with EL (\x1b[K) has cells with a background color but
     // no contents. Reflow must keep those cells so the background survives.
-    let mut p = vt100::Parser::new(5, 80, 0);
+    let mut p = term_wm_vt100::Parser::new(5, 80, 0);
     p.process(b"hello\x1b[44m\x1b[2;1H\x1b[K");
     assert_eq!(
         p.screen().cell(1, 0).unwrap().bgcolor(),
-        vt100::Color::Idx(4)
+        term_wm_vt100::Color::Idx(4)
     );
     p.screen_mut().set_size(5, 40);
     assert_eq!(
         p.screen().cell(1, 0).unwrap().bgcolor(),
-        vt100::Color::Idx(4)
+        term_wm_vt100::Color::Idx(4)
     );
     p.screen_mut().set_size(5, 80);
     assert_eq!(
         p.screen().cell(1, 0).unwrap().bgcolor(),
-        vt100::Color::Idx(4)
+        term_wm_vt100::Color::Idx(4)
     );
 
     // Background-colored spaces also survive.
-    let mut q = vt100::Parser::new(5, 80, 0);
+    let mut q = term_wm_vt100::Parser::new(5, 80, 0);
     q.process(b"\x1b[44m");
     for _ in 0..80 {
         q.process(b" ");
@@ -165,13 +165,13 @@ fn background_only_regions_keep_their_color() {
     q.screen_mut().set_size(5, 40);
     assert_eq!(
         q.screen().cell(0, 20).unwrap().bgcolor(),
-        vt100::Color::Idx(4)
+        term_wm_vt100::Color::Idx(4)
     );
 }
 
 #[test]
 fn cursor_follows_content_through_reflow() {
-    let mut p = vt100::Parser::new(5, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(5, 20, 0);
     p.process(b"0123456789");
     assert_eq!(p.screen().cursor_position(), (0, 10));
     p.screen_mut().set_size(5, 8);
@@ -181,7 +181,7 @@ fn cursor_follows_content_through_reflow() {
 
 #[test]
 fn cursor_in_short_early_wrapped_row() {
-    let mut p = vt100::Parser::new(5, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(5, 20, 0);
     p.process(b"0123456789012345678901234"); // 25 chars, cursor at (1, 5)
     assert_eq!(p.screen().cursor_position(), (1, 5));
     p.screen_mut().set_size(5, 7);
@@ -193,7 +193,7 @@ fn cursor_in_short_early_wrapped_row() {
 
 #[test]
 fn pending_wrap_cursor_survives_reflow() {
-    let mut p = vt100::Parser::new(5, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(5, 20, 0);
     p.process(b"0123456789012345678901234567890123456789"); // 40 chars fills 2 rows, cursor pending at (1, 20)
     assert_eq!(p.screen().cursor_position(), (1, 20));
     p.screen_mut().set_size(5, 10);
@@ -203,7 +203,7 @@ fn pending_wrap_cursor_survives_reflow() {
 
 #[test]
 fn saved_cursor_restores_same_cell_after_reflow() {
-    let mut p = vt100::Parser::new(5, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(5, 20, 0);
     p.process(b"0123456789\x1b7abcde"); // DECSC at (0, 10), then cursor at (0, 15)
     p.screen_mut().set_size(5, 8);
     p.process(b"\x1b8"); // DECRC
@@ -213,7 +213,7 @@ fn saved_cursor_restores_same_cell_after_reflow() {
 
 #[test]
 fn alternate_screen_is_not_reflowed() {
-    let mut p = vt100::Parser::new(3, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(3, 20, 0);
     p.process(b"\x1b[?1049h01234567890123456789abcdef"); // alt screen, wraps to 2 rows
     p.screen_mut().set_size(3, 10);
     // the alternate grid keeps legacy truncate behavior: rows are cut, not
@@ -225,7 +225,7 @@ fn alternate_screen_is_not_reflowed() {
 
 #[test]
 fn scrolled_up_viewport_stays_anchored() {
-    let mut p = vt100::Parser::new(3, 20, 10);
+    let mut p = term_wm_vt100::Parser::new(3, 20, 10);
     for i in 0..6u32 {
         p.process(format!("line {i}: {}\r\n", "a".repeat(12)).as_bytes());
     }
@@ -242,7 +242,7 @@ fn scrolled_up_viewport_stays_anchored() {
 
 #[test]
 fn tab_stops_remain_valid_after_reflow() {
-    let mut p = vt100::Parser::new(3, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(3, 20, 0);
     p.process(b"abcdefghij"); // cursor at (0, 10)
     p.screen_mut().set_size(3, 30); // grow width
     p.process(b"\t"); // tab past old width must not panic
@@ -251,7 +251,7 @@ fn tab_stops_remain_valid_after_reflow() {
 
 #[test]
 fn cursor_preceded_by_wide_char_maps_correctly() {
-    let mut p = vt100::Parser::new(5, 20, 0);
+    let mut p = term_wm_vt100::Parser::new(5, 20, 0);
     p.process("あabcde".as_bytes()); // wide char (2 cols) + 5 chars; cursor at (0, 7)
     assert_eq!(p.screen().cursor_position(), (0, 7));
     p.screen_mut().set_size(5, 8);
@@ -263,7 +263,7 @@ fn cursor_preceded_by_wide_char_maps_correctly() {
 #[test]
 fn test_zsh_sigwinch_prompt_duplication_behavior() {
     // 1. Initialize grid at width 40 with history and a wide prompt
-    let mut parser = vt100::Parser::new(10, 40, 0);
+    let mut parser = term_wm_vt100::Parser::new(10, 40, 0);
     parser.process(b"ls -la\r\nsamply.json  src  target  tests  vendor\r\ntest-user@test-host term-wm % ");
 
     // 2. Shrink grid to width 20 via screen_mut()

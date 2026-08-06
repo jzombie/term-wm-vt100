@@ -1,13 +1,15 @@
 [package]
-name = "vt100"
-version = "0.16.2"
-authors = ["Jesse Luehrs <doy@tozt.net>"]
+name = "term-wm-vt100"
+version = "0.16.2-patch1"
+authors = [
+    "Jesse Luehrs <doy@tozt.net>",
+    "Jeremy Harris <jeremy.harris@zenosmosis.com"
+]
 edition = "2021"
 rust-version = "1.70"
 
-description = "Library for parsing terminal data"
-homepage = "https://github.com/doy/vt100-rust"
-repository = "https://github.com/doy/vt100-rust"
+description = "Fork of vt100 adding grid reflow on terminal resize for term-wm"
+repository = "https://github.com/jzombie/term-wm-vt100"
 readme = "README.md"
 keywords = ["terminal", "vt100"]
 categories = ["command-line-interface", "encoding"]

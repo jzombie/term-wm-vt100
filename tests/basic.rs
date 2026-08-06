@@ -1,12 +1,12 @@
 #[test]
 fn object_creation() {
-    let parser = vt100::Parser::default();
+    let parser = term_wm_vt100::Parser::default();
     assert_eq!(parser.screen().size(), (24, 80));
 }
 
 #[test]
 fn process_text() {
-    let mut parser = vt100::Parser::default();
+    let mut parser = term_wm_vt100::Parser::default();
     let input = b"foo\x1b[31m\x1b[32mb\x1b[3;7;42ma\x1b[23mr";
     parser.process(input);
     assert_eq!(parser.screen().contents(), "foobar");
@@ -14,7 +14,7 @@ fn process_text() {
 
 #[test]
 fn set_size() {
-    let mut parser = vt100::Parser::default();
+    let mut parser = term_wm_vt100::Parser::default();
     assert_eq!(parser.screen().size(), (24, 80));
     assert_eq!(parser.screen().cursor_position(), (0, 0));
 
@@ -56,7 +56,7 @@ fn set_size() {
     parser.screen_mut().set_size(34, 8);
     assert_eq!(parser.screen().contents(), "01234567890123456789");
 
-    let mut parser = vt100::Parser::default();
+    let mut parser = term_wm_vt100::Parser::default();
     assert_eq!(parser.screen().size(), (24, 80));
     parser.screen_mut().set_size(30, 100);
     assert_eq!(parser.screen().size(), (30, 100));
@@ -66,7 +66,7 @@ fn set_size() {
         "                                                                           foobar"
     );
 
-    let mut parser = vt100::Parser::default();
+    let mut parser = term_wm_vt100::Parser::default();
     assert_eq!(parser.screen().size(), (24, 80));
     parser.screen_mut().set_size(30, 100);
     assert_eq!(parser.screen().size(), (30, 100));
@@ -79,7 +79,7 @@ fn set_size() {
 
 #[test]
 fn cell_contents() {
-    let mut parser = vt100::Parser::default();
+    let mut parser = term_wm_vt100::Parser::default();
     let input = b"foo\x1b[31m\x1b[32mb\x1b[3;7;42ma\x1b[23mr";
     parser.process(input);
     assert_eq!(parser.screen().cell(0, 0).unwrap().contents(), "f");
@@ -93,31 +93,31 @@ fn cell_contents() {
 
 #[test]
 fn cell_colors() {
-    let mut parser = vt100::Parser::default();
+    let mut parser = term_wm_vt100::Parser::default();
     let input = b"foo\x1b[31m\x1b[32mb\x1b[3;7;42ma\x1b[23mr";
     parser.process(input);
 
     assert_eq!(
         parser.screen().cell(0, 0).unwrap().fgcolor(),
-        vt100::Color::Default
+        term_wm_vt100::Color::Default
     );
     assert_eq!(
         parser.screen().cell(0, 3).unwrap().fgcolor(),
-        vt100::Color::Idx(2)
+        term_wm_vt100::Color::Idx(2)
     );
     assert_eq!(
         parser.screen().cell(0, 4).unwrap().fgcolor(),
-        vt100::Color::Idx(2)
+        term_wm_vt100::Color::Idx(2)
     );
     assert_eq!(
         parser.screen().cell(0, 4).unwrap().bgcolor(),
-        vt100::Color::Idx(2)
+        term_wm_vt100::Color::Idx(2)
     );
 }
 
 #[test]
 fn cell_attrs() {
-    let mut parser = vt100::Parser::default();
+    let mut parser = term_wm_vt100::Parser::default();
     let input = b"foo\x1b[31m\x1b[32mb\x1b[3;7;42ma\x1b[23mr";
     parser.process(input);
 
