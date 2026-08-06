@@ -86,9 +86,15 @@ impl Screen {
 
     /// Resizes the terminal.
     pub fn set_size(&mut self, rows: u16, cols: u16) {
-        self.grid.set_size(crate::grid::Size { rows, cols });
+        // Reflow the main grid so soft-wrapped lines in the scrollback re-wrap
+        // to the new width (information is preserved instead of truncated).
+        // The alternate screen grid is NOT reflowed: alt-screen applications
+        // (vim, tmux, etc.) lay out a 2D matrix via absolute cursor
+        // positioning and repaint on SIGWINCH, so reflowing their grid only
+        // corrupts the intermediate frame before the redraw.
+        self.grid.set_size(crate::grid::Size { rows, cols }, true);
         self.alternate_grid
-            .set_size(crate::grid::Size { rows, cols });
+            .set_size(crate::grid::Size { rows, cols }, false);
     }
 
     /// Returns the current size of the terminal.

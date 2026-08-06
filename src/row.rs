@@ -14,7 +14,20 @@ impl Row {
         }
     }
 
-    fn cols(&self) -> u16 {
+    pub(crate) fn from_cells(cells: Vec<crate::Cell>, wrapped: bool) -> Self {
+        Self { cells, wrapped }
+    }
+
+    /// Appends default cells until the row is `cols` wide. Used when
+    /// rebuilding rows during reflow, where content rows may be shorter than
+    /// the terminal width.
+    pub(crate) fn pad(&mut self, cols: u16) {
+        while self.cells.len() < usize::from(cols) {
+            self.cells.push(crate::Cell::new());
+        }
+    }
+
+    pub(crate) fn cols(&self) -> u16 {
         self.cells
             .len()
             .try_into()
