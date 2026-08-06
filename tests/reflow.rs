@@ -128,6 +128,28 @@ fn explicit_trailing_spaces_are_preserved() {
 }
 
 #[test]
+fn background_only_regions_keep_their_color() {
+    // A region painted with EL (\x1b[K) has cells with a background color but
+    // no contents. Reflow must keep those cells so the background survives.
+    let mut p = vt100::Parser::new(5, 80, 0);
+    p.process(b"hello\x1b[44m\x1b[2;1H\x1b[K");
+    assert_eq!(p.screen().cell(1, 0).unwrap().bgcolor(), vt100::Color::Idx(4));
+    p.screen_mut().set_size(5, 40);
+    assert_eq!(p.screen().cell(1, 0).unwrap().bgcolor(), vt100::Color::Idx(4));
+    p.screen_mut().set_size(5, 80);
+    assert_eq!(p.screen().cell(1, 0).unwrap().bgcolor(), vt100::Color::Idx(4));
+
+    // Background-colored spaces also survive.
+    let mut q = vt100::Parser::new(5, 80, 0);
+    q.process(b"\x1b[44m");
+    for _ in 0..80 {
+        q.process(b" ");
+    }
+    q.screen_mut().set_size(5, 40);
+    assert_eq!(q.screen().cell(0, 20).unwrap().bgcolor(), vt100::Color::Idx(4));
+}
+
+#[test]
 fn cursor_follows_content_through_reflow() {
     let mut p = vt100::Parser::new(5, 20, 0);
     p.process(b"0123456789");

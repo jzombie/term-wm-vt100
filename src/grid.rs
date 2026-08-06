@@ -184,21 +184,26 @@ impl Grid {
             let line_start_in_all = all_new.len();
 
             // Flatten the logical line into a stream of written cells. Wide
-            // continuation cells are skipped and trailing unwritten padding is
-            // dropped, except for the cursor row which keeps blank cells up to
-            // the cursor column so its position survives the reflow.
+            // continuation cells are skipped and trailing unwritten default
+            // padding is dropped, except for the cursor row which keeps blank
+            // cells up to the cursor column so its position survives the
+            // reflow. Cells without contents but with non-default attributes
+            // (e.g. a background-color region painted with EL / \x1b[K) are
+            // kept so background colors survive the reflow.
             let mut cells: Vec<crate::Cell> = Vec::new();
             let mut src: Vec<(usize, u16)> = Vec::new();
             for g in start..end {
                 let row = grid_row_at(&sb_rows, &vis_rows, g);
                 let cols = row.cols();
-                let mut last_written: u16 = 0;
+                let mut last_meaningful: u16 = 0;
                 for c in 0..cols {
-                    if row.get(c).is_some_and(crate::Cell::has_contents) {
-                        last_written = c + 1;
+                    if let Some(ce) = row.get(c) {
+                        if ce.has_contents() || ce.attrs() != &crate::attrs::Attrs::default() {
+                            last_meaningful = c + 1;
+                        }
                     }
                 }
-                let mut row_end = last_written;
+                let mut row_end = last_meaningful;
                 if g == cursor_g
                     && !cursor_row_blank
                     && cursor_col < old_cols
