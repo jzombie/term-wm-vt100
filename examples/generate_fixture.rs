@@ -14,10 +14,10 @@ fn main() {
             .unwrap();
     let inputs = std::io::BufReader::new(inputs);
 
-    let mut i = 1;
     let mut prev_input = vec![];
-    for line in inputs.lines() {
+    for (idx, line) in inputs.lines().enumerate() {
         let line = line.unwrap();
+        let i = idx + 1;
 
         let input = helpers::unhex(line.as_bytes());
         let mut input_file = std::fs::File::create(format!(
@@ -36,7 +36,5 @@ fn main() {
         ))
         .unwrap();
         serde_json::to_writer_pretty(output_file, &screen).unwrap();
-
-        i += 1;
     }
 }
