@@ -58,7 +58,8 @@ fn xtwinops() {
         }
     }
 
-    let mut vt = term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, Callbacks);
+    let mut vt =
+        term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, Callbacks);
     assert_eq!(vt.screen().size(), (24, 80));
     vt.process(b"\x1b[8;24;80t");
     assert_eq!(vt.screen().size(), (24, 80));
@@ -69,7 +70,8 @@ fn xtwinops() {
     vt.process(b"\x1b[8;24t");
     assert_eq!(vt.screen().size(), (24, 24));
 
-    let mut vt = term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, Callbacks);
+    let mut vt =
+        term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, Callbacks);
     assert_eq!(vt.screen().size(), (24, 80));
     vt.process(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     assert_eq!(

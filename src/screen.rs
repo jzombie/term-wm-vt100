@@ -726,6 +726,19 @@ impl Screen {
             // width() can only return 0, 1, or 2
             .unwrap();
 
+        if !self.mode(MODE_AUTOWRAP) {
+            // A wide character needs `width` contiguous cells. With autowrap
+            // disabled there is no wrapping to fall back on, so clamp the start
+            // column to the right margin to keep the continuation cell write
+            // (and the cursor) strictly inside the row.
+            if size.cols < width {
+                return;
+            }
+            if pos.col > size.cols - width {
+                self.grid_mut().col_set(size.cols - width);
+            }
+        }
+
         if self.mode(MODE_AUTOWRAP) {
             // it doesn't make any sense to wrap if the last column in a row
             // didn't already have contents. don't try to handle the case where a
@@ -747,7 +760,9 @@ impl Screen {
                     // self.grid().pos() which we assume to always have a valid
                     // row value. size.cols - 1 is also always a valid column.
                     .unwrap();
-                if last_cell.has_contents() || last_cell.is_wide_continuation() {
+                if last_cell.has_contents()
+                    || last_cell.is_wide_continuation()
+                {
                     wrap = true;
                 }
             }
@@ -958,7 +973,11 @@ impl Screen {
                     .unwrap();
                 next_cell.clear(crate::attrs::Attrs::default());
                 next_cell.set_wide_continuation(true);
-                self.grid_mut().col_inc(1);
+                if self.mode(MODE_AUTOWRAP) {
+                    self.grid_mut().col_inc(1);
+                } else {
+                    self.grid_mut().col_inc_clamp(1);
+                }
             }
         }
     }
@@ -1417,9 +1436,19 @@ mod tests {
         parser.process(&chars);
 
         let screen = parser.screen();
-        assert_eq!(screen.cursor_position(), (0, 79), "cursor must stay at the right margin");
-        assert!(row_is_empty(screen, 1, 80), "row 1 must remain empty (no wrap)");
-        assert!(!screen.row_wrapped(0), "row 0 must not be marked as wrapped");
+        assert_eq!(
+            screen.cursor_position(),
+            (0, 79),
+            "cursor must stay at the right margin"
+        );
+        assert!(
+            row_is_empty(screen, 1, 80),
+            "row 1 must remain empty (no wrap)"
+        );
+        assert!(
+            !screen.row_wrapped(0),
+            "row 0 must not be marked as wrapped"
+        );
         // 85th char (index 84): b'a' + 84 % 26 = 'g', overwritten 5 times at col 79.
         assert_eq!(screen.cell(0, 79).unwrap().contents(), "g");
     }
@@ -1432,7 +1461,11 @@ mod tests {
 
         // 80 chars with wrap on → cursor parks at col 80 (pending wrap).
         parser.process(&vec![b'a'; 80]);
-        assert_eq!(parser.screen().cursor_position(), (0, 80), "pending wrap must be set");
+        assert_eq!(
+            parser.screen().cursor_position(),
+            (0, 80),
+            "pending wrap must be set"
+        );
 
         parser.process(b"\x1b[?7l");
         assert_eq!(
@@ -1491,6 +1524,62 @@ mod tests {
         assert!(
             parser.screen().cell(0, 79).unwrap().contents().is_empty(),
             "EL 0 must clear the last column even at the pending-wrap position"
+        );
+    }
+
+    /// DECAWM off: writing a wide character at the right margin must not panic
+    /// or spill onto the next row. The start column clamps back so the glyph's
+    /// continuation cell stays inside the row.
+    #[test]
+    fn decawn_off_wide_char_at_right_margin_does_not_panic() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"\x1b[?7l");
+        parser.process(b"\x1b[1;80H");
+
+        parser.process("あ".as_bytes());
+
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cursor_position(),
+            (0, 79),
+            "cursor must stay at the right margin"
+        );
+        assert!(
+            row_is_empty(screen, 1, 80),
+            "row 1 must remain empty (no wrap)"
+        );
+        assert_eq!(
+            screen.cell(0, 78).unwrap().contents(),
+            "あ",
+            "wide char must be drawn at cols-2"
+        );
+        assert!(
+            screen.cell(0, 79).unwrap().is_wide_continuation(),
+            "continuation cell must be set at the last column"
+        );
+    }
+
+    /// DECAWM off: writing a wide character at cols-2 must not advance the
+    /// cursor past the right margin (no pending-wrap state).
+    #[test]
+    fn decawn_off_wide_char_at_cols_minus_two_does_not_overshoot() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"\x1b[?7l");
+        parser.process(b"\x1b[1;79H");
+
+        parser.process("あ".as_bytes());
+
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cursor_position(),
+            (0, 79),
+            "cursor must be clamped to the margin, not 80"
+        );
+        assert!(row_is_empty(screen, 1, 80), "row 1 must remain empty");
+        assert_eq!(screen.cell(0, 78).unwrap().contents(), "あ");
+        assert!(
+            screen.cell(0, 79).unwrap().is_wide_continuation(),
+            "continuation cell must be set at the last column"
         );
     }
 }

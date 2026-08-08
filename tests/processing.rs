@@ -26,13 +26,21 @@ fn split_osc() {
             self.icon_name =
                 std::str::from_utf8(icon_name).unwrap().to_string();
         }
-        fn set_window_title(&mut self, _: &mut term_wm_vt100::Screen, title: &[u8]) {
+        fn set_window_title(
+            &mut self,
+            _: &mut term_wm_vt100::Screen,
+            title: &[u8],
+        ) {
             self.title = std::str::from_utf8(title).unwrap().to_string();
         }
     }
 
-    let mut parser =
-        term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, Window::default());
+    let mut parser = term_wm_vt100::Parser::new_with_callbacks(
+        24,
+        80,
+        0,
+        Window::default(),
+    );
     for c in b"\x1b]0;a '[]_\x07" {
         assert_eq!(parser.callbacks().icon_name, "");
         assert_eq!(parser.callbacks().title, "");

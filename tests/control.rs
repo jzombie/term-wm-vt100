@@ -12,8 +12,12 @@ fn bel() {
         }
     }
 
-    let mut parser =
-        term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, State { bel: 0 });
+    let mut parser = term_wm_vt100::Parser::new_with_callbacks(
+        24,
+        80,
+        0,
+        State { bel: 0 },
+    );
     assert_eq!(parser.callbacks().bel, 0);
 
     let screen = parser.screen().clone();
