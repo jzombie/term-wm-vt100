@@ -7,6 +7,12 @@
 * Support for DECAWM (`CSI ? 7 h/l`), the DEC auto-wrap mode toggle. It is on
   by default; when disabled, characters are clamped to the right margin rather
   than wrapping to the next row.
+* Support for IRM insert mode (`CSI 4 h/l`). When insert mode is enabled, a
+  printable written at the cursor shifts the rest of the row right instead of
+  overwriting the existing cell. Editors such as pico and nano use it to insert
+  characters into the middle of a line; previously non-private `CSI h/l` were
+  silently ignored, so an inserted character clobbered the existing text (the
+  "types over existing characters" bug on wrapped lines).
 
 ### Fixed
 
@@ -23,6 +29,9 @@
 
 * The README synopsis is now included directly as the crate documentation, so
   its example is verified as a doctest on every build.
+* The `real_terminal_compare` example now enters/leaves raw mode via
+  `crossterm` (through a RAII `RawModeGuard`) instead of `nix` termios, making
+  it cross-platform; the `nix` dev-dependency was replaced with `crossterm`.
 
 ## [0.16.2-patch1] - 2026-08-06
 
