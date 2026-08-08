@@ -1420,8 +1420,7 @@ mod tests {
         (0..cols).all(|col| {
             screen
                 .cell(row, col)
-                .map(|c| c.contents().is_empty())
-                .unwrap_or(true)
+                .is_none_or(|c| c.contents().is_empty())
         })
     }
 
@@ -1432,7 +1431,7 @@ mod tests {
         let mut parser = Parser::new(24, 80, 0);
         parser.process(b"\x1b[?7l");
 
-        let chars: Vec<u8> = (0..85).map(|i| b'a' + (i % 26) as u8).collect();
+        let chars: Vec<u8> = (0..85).map(|i| b'a' + u8::try_from(i % 26).unwrap()).collect();
         parser.process(&chars);
 
         let screen = parser.screen();
@@ -1460,7 +1459,7 @@ mod tests {
         let mut parser = Parser::new(24, 80, 0);
 
         // 80 chars with wrap on → cursor parks at col 80 (pending wrap).
-        parser.process(&vec![b'a'; 80]);
+        parser.process(&[b'a'; 80]);
         assert_eq!(
             parser.screen().cursor_position(),
             (0, 80),
@@ -1493,7 +1492,7 @@ mod tests {
         parser.process(b"\x1b[1;1H");
 
         // Write a line up to the margin.
-        parser.process(&vec![b'a'; 79]);
+        parser.process(&[b'a'; 79]);
         // Clear to end of line from the margin, then overwrite the margin cell.
         parser.process(b"\x1b[0K");
         parser.process(b"Z");
@@ -1513,7 +1512,7 @@ mod tests {
     #[test]
     fn el_clears_last_column_in_pending_wrap_state() {
         let mut parser = Parser::new(24, 80, 0);
-        parser.process(&vec![b'a'; 80]);
+        parser.process(&[b'a'; 80]);
         assert_eq!(
             parser.screen().cursor_position(),
             (0, 80),
