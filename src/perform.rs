@@ -111,6 +111,8 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 'F' => self.screen.cpl(canonicalize_params_1(params, 1)),
                 'G' => self.screen.cha(canonicalize_params_1(params, 1)),
                 'H' => self.screen.cup(canonicalize_params_2(params, 1, 1)),
+                'h' => self.screen.sm(params, unhandled),
+                'l' => self.screen.rm(params, unhandled),
                 'J' => self
                     .screen
                     .ed(canonicalize_params_1(params, 0), unhandled),

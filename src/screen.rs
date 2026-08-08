@@ -8,6 +8,10 @@ const MODE_ALTERNATE_SCREEN: u8 = 0b0000_1000;
 const MODE_BRACKETED_PASTE: u8 = 0b0001_0000;
 /// DECAWM — automatic wrap at the right margin (on by default).
 const MODE_AUTOWRAP: u8 = 0b0010_0000;
+/// IRM — insert mode (`CSI 4 h`/`l`): printable characters are inserted at the
+/// cursor, shifting the rest of the row right, instead of overwriting. Editors
+/// (pico/nano) use this to insert characters into the middle of a line.
+const MODE_INSERT: u8 = 0b0100_0000;
 
 /// The xterm mouse handling mode currently in use.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
@@ -901,6 +905,13 @@ impl Screen {
                 next_cell.set(' ', attrs);
             }
 
+            if self.mode(MODE_INSERT) && pos.col < size.cols {
+                // IRM insert mode: shift the rest of the row right so the new
+                // character is inserted at the cursor instead of overwriting
+                // the existing cell (editors like pico use CSI 4h/4l for
+                // mid-line insertion).
+                self.grid_mut().insert_cells(1);
+            }
             let cell = self
                 .grid_mut()
                 .drawing_cell_mut(pos)
@@ -1184,6 +1195,34 @@ impl Screen {
         self.grid_mut().row_set(row - 1);
     }
 
+    // CSI h (non-private: Set Mode, e.g. IRM insert mode)
+    pub(crate) fn sm(
+        &mut self,
+        params: &vte::Params,
+        mut unhandled: impl FnMut(&mut Self),
+    ) {
+        for param in params {
+            match param {
+                [4] => self.set_mode(MODE_INSERT),
+                _ => unhandled(self),
+            }
+        }
+    }
+
+    // CSI l (non-private: Reset Mode, e.g. IRM insert mode)
+    pub(crate) fn rm(
+        &mut self,
+        params: &vte::Params,
+        mut unhandled: impl FnMut(&mut Self),
+    ) {
+        for param in params {
+            match param {
+                [4] => self.clear_mode(MODE_INSERT),
+                _ => unhandled(self),
+            }
+        }
+    }
+
     // CSI ? h
     pub(crate) fn decset(
         &mut self,
@@ -1431,7 +1470,9 @@ mod tests {
         let mut parser = Parser::new(24, 80, 0);
         parser.process(b"\x1b[?7l");
 
-        let chars: Vec<u8> = (0..85).map(|i| b'a' + u8::try_from(i % 26).unwrap()).collect();
+        let chars: Vec<u8> = (0..85)
+            .map(|i| b'a' + u8::try_from(i % 26).unwrap())
+            .collect();
         parser.process(&chars);
 
         let screen = parser.screen();
@@ -1456,23 +1497,28 @@ mod tests {
     /// clamps to the last column and the next character overwrites it.
     #[test]
     fn decawn_toggle_resets_pending_wrap() {
-        let mut parser = Parser::new(24, 80, 0);
-
-        // 80 chars with wrap on → cursor parks at col 80 (pending wrap).
-        parser.process(&[b'a'; 80]);
+        // Part 1: with wrap on, the 81st char after 80 wraps to row 1
+        // (proving the pending-wrap state is active).
+        let mut wrapping = Parser::new(24, 80, 0);
+        wrapping.process(&[b'a'; 80]);
+        wrapping.process(b"X");
+        assert_eq!(wrapping.screen().cell(0, 79).unwrap().contents(), "a");
         assert_eq!(
-            parser.screen().cursor_position(),
-            (0, 80),
-            "pending wrap must be set"
+            wrapping.screen().cell(1, 0).unwrap().contents(),
+            "X",
+            "with wrap on the 81st char must wrap to row 1"
         );
 
+        // Part 2: disable wrap while pending → cursor clamps to the margin and
+        // the next char overwrites the last column instead of wrapping.
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(&[b'a'; 80]);
         parser.process(b"\x1b[?7l");
         assert_eq!(
             parser.screen().cursor_position(),
             (0, 79),
             "disabling wrap must clamp the pending-wrap cursor to the margin"
         );
-
         parser.process(b"X");
         assert_eq!(parser.screen().cursor_position(), (0, 79));
         assert_eq!(parser.screen().cell(0, 79).unwrap().contents(), "X");
@@ -1580,5 +1626,55 @@ mod tests {
             screen.cell(0, 79).unwrap().is_wide_continuation(),
             "continuation cell must be set at the last column"
         );
+    }
+
+    /// IRM insert mode (`CSI 4 h`): a printable written at the cursor shifts the
+    /// rest of the row right instead of overwriting. pico uses this to insert
+    /// characters mid-line.
+    #[test]
+    fn insert_mode_shifts_row_right() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"hello");
+        // Move to col 1 (0-based) and enable insert mode.
+        parser.process(b"\x1b[1;2H\x1b[4h");
+        parser.process(b"X");
+        parser.process(b"\x1b[4l");
+
+        let screen = parser.screen();
+        assert_eq!(screen.cell(0, 0).unwrap().contents(), "h");
+        assert_eq!(
+            screen.cell(0, 1).unwrap().contents(),
+            "X",
+            "inserted char"
+        );
+        assert_eq!(
+            screen.cell(0, 2).unwrap().contents(),
+            "e",
+            "original shifted right"
+        );
+        assert_eq!(screen.cell(0, 3).unwrap().contents(), "l");
+        assert_eq!(screen.cell(0, 4).unwrap().contents(), "l");
+        assert_eq!(
+            screen.cell(0, 5).unwrap().contents(),
+            "o",
+            "row tail preserved"
+        );
+    }
+
+    /// Without IRM (default), a printable overwrites the cell at the cursor.
+    #[test]
+    fn no_insert_mode_overwrites() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"hello");
+        parser.process(b"\x1b[1;2H");
+        parser.process(b"X");
+
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cell(0, 1).unwrap().contents(),
+            "X",
+            "overwrote col 1"
+        );
+        assert_eq!(screen.cell(0, 2).unwrap().contents(), "l", "not shifted");
     }
 }
