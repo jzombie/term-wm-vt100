@@ -6,6 +6,8 @@ const MODE_APPLICATION_CURSOR: u8 = 0b0000_0010;
 const MODE_HIDE_CURSOR: u8 = 0b0000_0100;
 const MODE_ALTERNATE_SCREEN: u8 = 0b0000_1000;
 const MODE_BRACKETED_PASTE: u8 = 0b0001_0000;
+/// DECAWM — automatic wrap at the right margin (on by default).
+const MODE_AUTOWRAP: u8 = 0b0010_0000;
 
 /// The xterm mouse handling mode currently in use.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
@@ -78,7 +80,7 @@ impl Screen {
             attrs: crate::attrs::Attrs::default(),
             saved_attrs: crate::attrs::Attrs::default(),
 
-            modes: 0,
+            modes: MODE_AUTOWRAP,
             mouse_protocol_mode: MouseProtocolMode::default(),
             mouse_protocol_encoding: MouseProtocolEncoding::default(),
         }
@@ -724,31 +726,38 @@ impl Screen {
             // width() can only return 0, 1, or 2
             .unwrap();
 
-        // it doesn't make any sense to wrap if the last column in a row
-        // didn't already have contents. don't try to handle the case where a
-        // character wraps because there was only one column left in the
-        // previous row - literally everything handles this case differently,
-        // and this is tmux behavior (and also the simplest). i'm open to
-        // reconsidering this behavior, but only with a really good reason
-        // (xterm handles this by introducing the concept of triple width
-        // cells, which i really don't want to do).
-        let mut wrap = false;
-        if pos.col > size.cols - width {
-            let last_cell = self
-                .grid()
-                .drawing_cell(crate::grid::Pos {
-                    row: pos.row,
-                    col: size.cols - 1,
-                })
-                // pos.row is valid, since it comes directly from
-                // self.grid().pos() which we assume to always have a valid
-                // row value. size.cols - 1 is also always a valid column.
-                .unwrap();
-            if last_cell.has_contents() || last_cell.is_wide_continuation() {
-                wrap = true;
+        if self.mode(MODE_AUTOWRAP) {
+            // it doesn't make any sense to wrap if the last column in a row
+            // didn't already have contents. don't try to handle the case where a
+            // character wraps because there was only one column left in the
+            // previous row - literally everything handles this case differently,
+            // and this is tmux behavior (and also the simplest). i'm open to
+            // reconsidering this behavior, but only with a really good reason
+            // (xterm handles this by introducing the concept of triple width
+            // cells, which i really don't want to do).
+            let mut wrap = false;
+            if pos.col > size.cols - width {
+                let last_cell = self
+                    .grid()
+                    .drawing_cell(crate::grid::Pos {
+                        row: pos.row,
+                        col: size.cols - 1,
+                    })
+                    // pos.row is valid, since it comes directly from
+                    // self.grid().pos() which we assume to always have a valid
+                    // row value. size.cols - 1 is also always a valid column.
+                    .unwrap();
+                if last_cell.has_contents() || last_cell.is_wide_continuation() {
+                    wrap = true;
+                }
             }
+            self.grid_mut().col_wrap(width, wrap);
+        } else {
+            // DECAWM disabled: never wrap. Clamp the cursor to the right margin
+            // so a character at the last column is overwritten by the next one
+            // rather than wrapping to the following row.
+            self.grid_mut().col_clamp();
         }
-        self.grid_mut().col_wrap(width, wrap);
         let pos = self.grid().pos();
 
         if width == 0 {
@@ -886,7 +895,14 @@ impl Screen {
                 // that self.grid().pos().col has a valid value.
                 .unwrap();
             cell.set(c, attrs);
-            self.grid_mut().col_inc(1);
+            if self.mode(MODE_AUTOWRAP) {
+                self.grid_mut().col_inc(1);
+            } else {
+                // With autowrap disabled, writing the last column must not leave
+                // the cursor past the margin (no pending-wrap state); the next
+                // character overwrites the last column instead.
+                self.grid_mut().col_inc_clamp(1);
+            }
             if width > 1 {
                 let pos = self.grid().pos();
                 if self
@@ -1089,7 +1105,15 @@ impl Screen {
     ) {
         let attrs = self.attrs;
         match mode {
-            0 => self.grid_mut().erase_row_forward(attrs),
+            0 => {
+                // If the cursor sits at the pending-wrap position (col == cols),
+                // an erase-to-EOL would cover an empty range and leave the last
+                // column stale. Clamp to the right margin so it is cleared.
+                if self.grid().pos().col >= self.grid().size().cols {
+                    self.grid_mut().col_clamp();
+                }
+                self.grid_mut().erase_row_forward(attrs);
+            }
             1 => self.grid_mut().erase_row_backward(attrs),
             2 => self.grid_mut().erase_row(attrs),
             _ => unhandled(self),
@@ -1151,6 +1175,7 @@ impl Screen {
             match param {
                 [1] => self.set_mode(MODE_APPLICATION_CURSOR),
                 [6] => self.grid_mut().set_origin_mode(true),
+                [7] => self.set_mode(MODE_AUTOWRAP),
                 [9] => self.set_mouse_mode(MouseProtocolMode::Press),
                 [25] => self.clear_mode(MODE_HIDE_CURSOR),
                 [47] => self.enter_alternate_grid(),
@@ -1188,6 +1213,13 @@ impl Screen {
             match param {
                 [1] => self.clear_mode(MODE_APPLICATION_CURSOR),
                 [6] => self.grid_mut().set_origin_mode(false),
+                [7] => {
+                    self.clear_mode(MODE_AUTOWRAP);
+                    // Cancel any pending wrap (cursor at col == size.cols): clamp
+                    // back to the right margin so subsequent writes overwrite the
+                    // last column instead of spilling onto the next row.
+                    self.grid_mut().col_clamp();
+                }
                 [9] => self.clear_mouse_mode(MouseProtocolMode::Press),
                 [25] => self.set_mode(MODE_HIDE_CURSOR),
                 [47] => {
@@ -1356,5 +1388,109 @@ fn u16_to_u8(i: u16) -> Option<u8> {
     } else {
         // safe because we just ensured that the value fits in a u8
         Some(i.try_into().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Parser;
+
+    /// Every visible cell in `row` is empty.
+    fn row_is_empty(screen: &Screen, row: u16, cols: u16) -> bool {
+        (0..cols).all(|col| {
+            screen
+                .cell(row, col)
+                .map(|c| c.contents().is_empty())
+                .unwrap_or(true)
+        })
+    }
+
+    /// DECAWM off: writing across the right margin must NOT wrap. The cursor
+    /// clamps to the last column and subsequent characters overwrite it.
+    #[test]
+    fn decawn_off_clamps_to_right_margin() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"\x1b[?7l");
+
+        let chars: Vec<u8> = (0..85).map(|i| b'a' + (i % 26) as u8).collect();
+        parser.process(&chars);
+
+        let screen = parser.screen();
+        assert_eq!(screen.cursor_position(), (0, 79), "cursor must stay at the right margin");
+        assert!(row_is_empty(screen, 1, 80), "row 1 must remain empty (no wrap)");
+        assert!(!screen.row_wrapped(0), "row 0 must not be marked as wrapped");
+        // 85th char (index 84): b'a' + 84 % 26 = 'g', overwritten 5 times at col 79.
+        assert_eq!(screen.cell(0, 79).unwrap().contents(), "g");
+    }
+
+    /// Disabling DECAWM while a pending wrap is set must cancel it: the cursor
+    /// clamps to the last column and the next character overwrites it.
+    #[test]
+    fn decawn_toggle_resets_pending_wrap() {
+        let mut parser = Parser::new(24, 80, 0);
+
+        // 80 chars with wrap on → cursor parks at col 80 (pending wrap).
+        parser.process(&vec![b'a'; 80]);
+        assert_eq!(parser.screen().cursor_position(), (0, 80), "pending wrap must be set");
+
+        parser.process(b"\x1b[?7l");
+        assert_eq!(
+            parser.screen().cursor_position(),
+            (0, 79),
+            "disabling wrap must clamp the pending-wrap cursor to the margin"
+        );
+
+        parser.process(b"X");
+        assert_eq!(parser.screen().cursor_position(), (0, 79));
+        assert_eq!(parser.screen().cell(0, 79).unwrap().contents(), "X");
+        assert!(
+            row_is_empty(parser.screen(), 1, 80),
+            "the next character must overwrite the margin, not wrap"
+        );
+    }
+
+    /// Replay a pico-style horizontal-scroll sequence and assert nothing spills
+    /// to adjacent rows.
+    #[test]
+    fn long_line_horizontal_scroll_simulation() {
+        let mut parser = Parser::new(24, 80, 0);
+        // Editor manages its own columns: disable wrap.
+        parser.process(b"\x1b[?7l");
+        parser.process(b"\x1b[1;1H");
+
+        // Write a line up to the margin.
+        parser.process(&vec![b'a'; 79]);
+        // Clear to end of line from the margin, then overwrite the margin cell.
+        parser.process(b"\x1b[0K");
+        parser.process(b"Z");
+        // Restore wrap.
+        parser.process(b"\x1b[?7h");
+
+        let screen = parser.screen();
+        assert!(
+            row_is_empty(screen, 1, 80),
+            "no characters may spill onto row 2"
+        );
+        assert_eq!(screen.cell(0, 79).unwrap().contents(), "Z");
+    }
+
+    /// EL 0 (`ESC[0K`) at the pending-wrap column must clear the last column
+    /// instead of erasing an empty range.
+    #[test]
+    fn el_clears_last_column_in_pending_wrap_state() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(&vec![b'a'; 80]);
+        assert_eq!(
+            parser.screen().cursor_position(),
+            (0, 80),
+            "cursor must be at the pending-wrap column"
+        );
+
+        parser.process(b"\x1b[0K");
+        assert!(
+            parser.screen().cell(0, 79).unwrap().contents().is_empty(),
+            "EL 0 must clear the last column even at the pending-wrap position"
+        );
     }
 }

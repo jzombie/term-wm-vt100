@@ -1122,7 +1122,7 @@ impl Grid {
         }
     }
 
-    fn col_clamp(&mut self) {
+    pub(crate) fn col_clamp(&mut self) {
         if self.pos.col > self.size.cols - 1 {
             self.pos.col = self.size.cols - 1;
         }
