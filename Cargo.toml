@@ -3,7 +3,7 @@ name = "term-wm-vt100"
 version = "0.16.2-patch1"
 authors = [
     "Jesse Luehrs <doy@tozt.net>",
-    "Jeremy Harris <jeremy.harris@zenosmosis.com"
+    "Jeremy Harris <jeremy.harris@zenosmosis.com",
 ]
 edition = "2021"
 rust-version = "1.70"
