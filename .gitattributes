@@ -1,0 +1,4 @@
+# Raw terminal session byte-streams used as test fixtures. These are not
+# text files; a trailing LF is meaningful input and must never be converted
+# to CRLF on Windows checkout.
+*.typescript -text
