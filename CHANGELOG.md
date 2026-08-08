@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.16.2-patch2] - 2026-08-08
+
+### Added
+
+* Support for DECAWM (`CSI ? 7 h/l`), the DEC auto-wrap mode toggle. It is on
+  by default; when disabled, characters are clamped to the right margin rather
+  than wrapping to the next row.
+
+### Fixed
+
+* Fixed a panic when writing a wide character (CJK/emoji) at the right margin
+  while autowrap (DECAWM) is disabled; the continuation cell lookup indexed one
+  column past the end of the row.
+* Fixed the cursor overshooting to the pending-wrap column after writing a wide
+  character at the second-to-last column with autowrap disabled, which
+  corrupted the wide character's continuation cell on the next write.
+* `EL 0` (`CSI 0 K`) issued from the pending-wrap cursor position now clears
+  the last column instead of erasing an empty range.
+
+### Changed
+
+* The README synopsis is now included directly as the crate documentation, so
+  its example is verified as a doctest on every build.
+
 ## [0.16.2-patch1] - 2026-08-06
 
 [term-wm-vt100 fork]

@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-vt100"
-version = "0.16.2-patch1"
+version = "0.16.2-patch2"
 dependencies = [
  "itoa",
  "nix",
