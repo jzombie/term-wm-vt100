@@ -1,22 +1,31 @@
 use std::io::{Read as _, Write as _};
 
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
 #[path = "../tests/helpers/mod.rs"]
 mod helpers;
 
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn new() -> Self {
+        enable_raw_mode().expect("failed to enable raw mode");
+        RawModeGuard
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
 fn main() {
     unsafe { helpers::QUIET = true }
+    let _raw_mode = RawModeGuard::new();
 
     let mut stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
-
-    let mut termios = nix::sys::termios::tcgetattr(std::io::stdin()).unwrap();
-    nix::sys::termios::cfmakeraw(&mut termios);
-    nix::sys::termios::tcsetattr(
-        std::io::stdin(),
-        nix::sys::termios::SetArg::TCSANOW,
-        &termios,
-    )
-    .unwrap();
 
     let size = terminal_size::terminal_size().map_or(
         (24, 80),

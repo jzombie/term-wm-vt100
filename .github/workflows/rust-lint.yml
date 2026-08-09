@@ -1,10 +1,9 @@
 name: rust-lint
 
-on:
-  push:
-  pull_request:
-  workflow_dispatch:
+on: [pull_request]
 
+# Ensure only one run per branch/PR at a time. If new commits are pushed,
+# older jobs will be automatically canceled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -15,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@nightly
 
@@ -65,10 +64,12 @@ jobs:
     needs: udeps
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Workaround for macOS error when using `hashFiles`:
+      # "Error: The template is not valid....Fail to hash files under directory"
       - name: Calculate lockfile hash
         id: lockfile
         shell: bash
@@ -96,7 +97,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-lint-
 
-      - name: Install rustfmt clippy
+      # Note: This is a workaround for an issue that just started appearing in lint checks
+      # and I'm not yet sure if it's due to GitHub Actions having updated something behind
+      # the scenes:
+      # error: 'cargo-fmt' is not installed for the toolchain 'stable-x86_64-unknown-linux-gnu'
+      - name: Install rustfmt
         run: rustup component add rustfmt clippy
 
       - name: Install cargo-binstall
@@ -114,23 +119,32 @@ jobs:
           cargo binstall --no-confirm --no-symlinks --force cargo-deny cargo-audit cargo-sort \
             || cargo install --locked --force cargo-deny cargo-audit cargo-sort
 
+      # Ensure all Cargo.toml files are sorted
       - name: Check Cargo manifest sorting
         run: cargo sort --workspace --check
 
+      # Check formatting across the entire workspace
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # Run Clippy with all targets and features across workspace
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # Fail if any documentation warnings occur
       - name: Check documentation
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
 
+      # Security: cargo-deny across workspace
       - name: Run cargo-deny
-        run: cargo deny check
+        run: cargo deny check # Note: Apparently `-- --workspace` is not valid here
 
+      # Security: cargo-audit on root Cargo.lock
       - name: Run cargo-audit
         run: cargo audit
+
+  # Note: This is already handled by the linux-lint-tools job
+  # clippy-linux
 
   clippy-windows:
     name: lint (windows runner)
@@ -138,7 +152,7 @@ jobs:
     needs: udeps
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 

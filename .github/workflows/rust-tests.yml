@@ -1,3 +1,6 @@
+# Note: `include-ignored` is not running for these tests as they take an extremely long amount of time.
+# GitHub CI runners are clocked at over 1 hour on all 3 operating systems.
+
 name: rust-tests
 
 on:
@@ -71,7 +74,10 @@ jobs:
             ${{ runner.os }}-cargo-${{ steps.rustc.outputs.hash }}-${{ steps.lockfile.outputs.hash }}-
 
       - name: Test
-        run: cargo test --workspace --all-features --lib --bins --tests --examples -- --include-ignored
+        # Note: `include-ignored` was turned off for this configuration; GitHub CI runners are clocked
+        # at over 1 hour on all 3 operating systems.
+        # run: cargo test --workspace --all-features --lib --bins --tests --examples -- --include-ignored
+        run: cargo test --workspace --all-features --lib --bins --tests --examples
 
   test:
     name: test

@@ -6,6 +6,12 @@ const MODE_APPLICATION_CURSOR: u8 = 0b0000_0010;
 const MODE_HIDE_CURSOR: u8 = 0b0000_0100;
 const MODE_ALTERNATE_SCREEN: u8 = 0b0000_1000;
 const MODE_BRACKETED_PASTE: u8 = 0b0001_0000;
+/// DECAWM — automatic wrap at the right margin (on by default).
+const MODE_AUTOWRAP: u8 = 0b0010_0000;
+/// IRM — insert mode (`CSI 4 h`/`l`): printable characters are inserted at the
+/// cursor, shifting the rest of the row right, instead of overwriting. Editors
+/// (pico/nano) use this to insert characters into the middle of a line.
+const MODE_INSERT: u8 = 0b0100_0000;
 
 /// The xterm mouse handling mode currently in use.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
@@ -78,7 +84,7 @@ impl Screen {
             attrs: crate::attrs::Attrs::default(),
             saved_attrs: crate::attrs::Attrs::default(),
 
-            modes: 0,
+            modes: MODE_AUTOWRAP,
             mouse_protocol_mode: MouseProtocolMode::default(),
             mouse_protocol_encoding: MouseProtocolEncoding::default(),
         }
@@ -724,31 +730,53 @@ impl Screen {
             // width() can only return 0, 1, or 2
             .unwrap();
 
-        // it doesn't make any sense to wrap if the last column in a row
-        // didn't already have contents. don't try to handle the case where a
-        // character wraps because there was only one column left in the
-        // previous row - literally everything handles this case differently,
-        // and this is tmux behavior (and also the simplest). i'm open to
-        // reconsidering this behavior, but only with a really good reason
-        // (xterm handles this by introducing the concept of triple width
-        // cells, which i really don't want to do).
-        let mut wrap = false;
-        if pos.col > size.cols - width {
-            let last_cell = self
-                .grid()
-                .drawing_cell(crate::grid::Pos {
-                    row: pos.row,
-                    col: size.cols - 1,
-                })
-                // pos.row is valid, since it comes directly from
-                // self.grid().pos() which we assume to always have a valid
-                // row value. size.cols - 1 is also always a valid column.
-                .unwrap();
-            if last_cell.has_contents() || last_cell.is_wide_continuation() {
-                wrap = true;
+        if !self.mode(MODE_AUTOWRAP) {
+            // A wide character needs `width` contiguous cells. With autowrap
+            // disabled there is no wrapping to fall back on, so clamp the start
+            // column to the right margin to keep the continuation cell write
+            // (and the cursor) strictly inside the row.
+            if size.cols < width {
+                return;
+            }
+            if pos.col > size.cols - width {
+                self.grid_mut().col_set(size.cols - width);
             }
         }
-        self.grid_mut().col_wrap(width, wrap);
+
+        if self.mode(MODE_AUTOWRAP) {
+            // it doesn't make any sense to wrap if the last column in a row
+            // didn't already have contents. don't try to handle the case where a
+            // character wraps because there was only one column left in the
+            // previous row - literally everything handles this case differently,
+            // and this is tmux behavior (and also the simplest). i'm open to
+            // reconsidering this behavior, but only with a really good reason
+            // (xterm handles this by introducing the concept of triple width
+            // cells, which i really don't want to do).
+            let mut wrap = false;
+            if pos.col > size.cols - width {
+                let last_cell = self
+                    .grid()
+                    .drawing_cell(crate::grid::Pos {
+                        row: pos.row,
+                        col: size.cols - 1,
+                    })
+                    // pos.row is valid, since it comes directly from
+                    // self.grid().pos() which we assume to always have a valid
+                    // row value. size.cols - 1 is also always a valid column.
+                    .unwrap();
+                if last_cell.has_contents()
+                    || last_cell.is_wide_continuation()
+                {
+                    wrap = true;
+                }
+            }
+            self.grid_mut().col_wrap(width, wrap);
+        } else {
+            // DECAWM disabled: never wrap. Clamp the cursor to the right margin
+            // so a character at the last column is overwritten by the next one
+            // rather than wrapping to the following row.
+            self.grid_mut().col_clamp();
+        }
         let pos = self.grid().pos();
 
         if width == 0 {
@@ -877,6 +905,13 @@ impl Screen {
                 next_cell.set(' ', attrs);
             }
 
+            if self.mode(MODE_INSERT) && pos.col < size.cols {
+                // IRM insert mode: shift the rest of the row right so the new
+                // character is inserted at the cursor instead of overwriting
+                // the existing cell (editors like pico use CSI 4h/4l for
+                // mid-line insertion).
+                self.grid_mut().insert_cells(1);
+            }
             let cell = self
                 .grid_mut()
                 .drawing_cell_mut(pos)
@@ -886,7 +921,14 @@ impl Screen {
                 // that self.grid().pos().col has a valid value.
                 .unwrap();
             cell.set(c, attrs);
-            self.grid_mut().col_inc(1);
+            if self.mode(MODE_AUTOWRAP) {
+                self.grid_mut().col_inc(1);
+            } else {
+                // With autowrap disabled, writing the last column must not leave
+                // the cursor past the margin (no pending-wrap state); the next
+                // character overwrites the last column instead.
+                self.grid_mut().col_inc_clamp(1);
+            }
             if width > 1 {
                 let pos = self.grid().pos();
                 if self
@@ -942,7 +984,11 @@ impl Screen {
                     .unwrap();
                 next_cell.clear(crate::attrs::Attrs::default());
                 next_cell.set_wide_continuation(true);
-                self.grid_mut().col_inc(1);
+                if self.mode(MODE_AUTOWRAP) {
+                    self.grid_mut().col_inc(1);
+                } else {
+                    self.grid_mut().col_inc_clamp(1);
+                }
             }
         }
     }
@@ -1089,7 +1135,15 @@ impl Screen {
     ) {
         let attrs = self.attrs;
         match mode {
-            0 => self.grid_mut().erase_row_forward(attrs),
+            0 => {
+                // If the cursor sits at the pending-wrap position (col == cols),
+                // an erase-to-EOL would cover an empty range and leave the last
+                // column stale. Clamp to the right margin so it is cleared.
+                if self.grid().pos().col >= self.grid().size().cols {
+                    self.grid_mut().col_clamp();
+                }
+                self.grid_mut().erase_row_forward(attrs);
+            }
             1 => self.grid_mut().erase_row_backward(attrs),
             2 => self.grid_mut().erase_row(attrs),
             _ => unhandled(self),
@@ -1141,6 +1195,34 @@ impl Screen {
         self.grid_mut().row_set(row - 1);
     }
 
+    // CSI h (non-private: Set Mode, e.g. IRM insert mode)
+    pub(crate) fn sm(
+        &mut self,
+        params: &vte::Params,
+        mut unhandled: impl FnMut(&mut Self),
+    ) {
+        for param in params {
+            match param {
+                [4] => self.set_mode(MODE_INSERT),
+                _ => unhandled(self),
+            }
+        }
+    }
+
+    // CSI l (non-private: Reset Mode, e.g. IRM insert mode)
+    pub(crate) fn rm(
+        &mut self,
+        params: &vte::Params,
+        mut unhandled: impl FnMut(&mut Self),
+    ) {
+        for param in params {
+            match param {
+                [4] => self.clear_mode(MODE_INSERT),
+                _ => unhandled(self),
+            }
+        }
+    }
+
     // CSI ? h
     pub(crate) fn decset(
         &mut self,
@@ -1151,6 +1233,7 @@ impl Screen {
             match param {
                 [1] => self.set_mode(MODE_APPLICATION_CURSOR),
                 [6] => self.grid_mut().set_origin_mode(true),
+                [7] => self.set_mode(MODE_AUTOWRAP),
                 [9] => self.set_mouse_mode(MouseProtocolMode::Press),
                 [25] => self.clear_mode(MODE_HIDE_CURSOR),
                 [47] => self.enter_alternate_grid(),
@@ -1188,6 +1271,13 @@ impl Screen {
             match param {
                 [1] => self.clear_mode(MODE_APPLICATION_CURSOR),
                 [6] => self.grid_mut().set_origin_mode(false),
+                [7] => {
+                    self.clear_mode(MODE_AUTOWRAP);
+                    // Cancel any pending wrap (cursor at col == size.cols): clamp
+                    // back to the right margin so subsequent writes overwrite the
+                    // last column instead of spilling onto the next row.
+                    self.grid_mut().col_clamp();
+                }
                 [9] => self.clear_mouse_mode(MouseProtocolMode::Press),
                 [25] => self.set_mode(MODE_HIDE_CURSOR),
                 [47] => {
@@ -1356,5 +1446,235 @@ fn u16_to_u8(i: u16) -> Option<u8> {
     } else {
         // safe because we just ensured that the value fits in a u8
         Some(i.try_into().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Parser;
+
+    /// Every visible cell in `row` is empty.
+    fn row_is_empty(screen: &Screen, row: u16, cols: u16) -> bool {
+        (0..cols).all(|col| {
+            screen
+                .cell(row, col)
+                .is_none_or(|c| c.contents().is_empty())
+        })
+    }
+
+    /// DECAWM off: writing across the right margin must NOT wrap. The cursor
+    /// clamps to the last column and subsequent characters overwrite it.
+    #[test]
+    fn decawn_off_clamps_to_right_margin() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"\x1b[?7l");
+
+        let chars: Vec<u8> = (0..85)
+            .map(|i| b'a' + u8::try_from(i % 26).unwrap())
+            .collect();
+        parser.process(&chars);
+
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cursor_position(),
+            (0, 79),
+            "cursor must stay at the right margin"
+        );
+        assert!(
+            row_is_empty(screen, 1, 80),
+            "row 1 must remain empty (no wrap)"
+        );
+        assert!(
+            !screen.row_wrapped(0),
+            "row 0 must not be marked as wrapped"
+        );
+        // 85th char (index 84): b'a' + 84 % 26 = 'g', overwritten 5 times at col 79.
+        assert_eq!(screen.cell(0, 79).unwrap().contents(), "g");
+    }
+
+    /// Disabling DECAWM while a pending wrap is set must cancel it: the cursor
+    /// clamps to the last column and the next character overwrites it.
+    #[test]
+    fn decawn_toggle_resets_pending_wrap() {
+        // Part 1: with wrap on, the 81st char after 80 wraps to row 1
+        // (proving the pending-wrap state is active).
+        let mut wrapping = Parser::new(24, 80, 0);
+        wrapping.process(&[b'a'; 80]);
+        wrapping.process(b"X");
+        assert_eq!(wrapping.screen().cell(0, 79).unwrap().contents(), "a");
+        assert_eq!(
+            wrapping.screen().cell(1, 0).unwrap().contents(),
+            "X",
+            "with wrap on the 81st char must wrap to row 1"
+        );
+
+        // Part 2: disable wrap while pending → cursor clamps to the margin and
+        // the next char overwrites the last column instead of wrapping.
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(&[b'a'; 80]);
+        parser.process(b"\x1b[?7l");
+        assert_eq!(
+            parser.screen().cursor_position(),
+            (0, 79),
+            "disabling wrap must clamp the pending-wrap cursor to the margin"
+        );
+        parser.process(b"X");
+        assert_eq!(parser.screen().cursor_position(), (0, 79));
+        assert_eq!(parser.screen().cell(0, 79).unwrap().contents(), "X");
+        assert!(
+            row_is_empty(parser.screen(), 1, 80),
+            "the next character must overwrite the margin, not wrap"
+        );
+    }
+
+    /// Replay a pico-style horizontal-scroll sequence and assert nothing spills
+    /// to adjacent rows.
+    #[test]
+    fn long_line_horizontal_scroll_simulation() {
+        let mut parser = Parser::new(24, 80, 0);
+        // Editor manages its own columns: disable wrap.
+        parser.process(b"\x1b[?7l");
+        parser.process(b"\x1b[1;1H");
+
+        // Write a line up to the margin.
+        parser.process(&[b'a'; 79]);
+        // Clear to end of line from the margin, then overwrite the margin cell.
+        parser.process(b"\x1b[0K");
+        parser.process(b"Z");
+        // Restore wrap.
+        parser.process(b"\x1b[?7h");
+
+        let screen = parser.screen();
+        assert!(
+            row_is_empty(screen, 1, 80),
+            "no characters may spill onto row 2"
+        );
+        assert_eq!(screen.cell(0, 79).unwrap().contents(), "Z");
+    }
+
+    /// EL 0 (`ESC[0K`) at the pending-wrap column must clear the last column
+    /// instead of erasing an empty range.
+    #[test]
+    fn el_clears_last_column_in_pending_wrap_state() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(&[b'a'; 80]);
+        assert_eq!(
+            parser.screen().cursor_position(),
+            (0, 80),
+            "cursor must be at the pending-wrap column"
+        );
+
+        parser.process(b"\x1b[0K");
+        assert!(
+            parser.screen().cell(0, 79).unwrap().contents().is_empty(),
+            "EL 0 must clear the last column even at the pending-wrap position"
+        );
+    }
+
+    /// DECAWM off: writing a wide character at the right margin must not panic
+    /// or spill onto the next row. The start column clamps back so the glyph's
+    /// continuation cell stays inside the row.
+    #[test]
+    fn decawn_off_wide_char_at_right_margin_does_not_panic() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"\x1b[?7l");
+        parser.process(b"\x1b[1;80H");
+
+        parser.process("あ".as_bytes());
+
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cursor_position(),
+            (0, 79),
+            "cursor must stay at the right margin"
+        );
+        assert!(
+            row_is_empty(screen, 1, 80),
+            "row 1 must remain empty (no wrap)"
+        );
+        assert_eq!(
+            screen.cell(0, 78).unwrap().contents(),
+            "あ",
+            "wide char must be drawn at cols-2"
+        );
+        assert!(
+            screen.cell(0, 79).unwrap().is_wide_continuation(),
+            "continuation cell must be set at the last column"
+        );
+    }
+
+    /// DECAWM off: writing a wide character at cols-2 must not advance the
+    /// cursor past the right margin (no pending-wrap state).
+    #[test]
+    fn decawn_off_wide_char_at_cols_minus_two_does_not_overshoot() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"\x1b[?7l");
+        parser.process(b"\x1b[1;79H");
+
+        parser.process("あ".as_bytes());
+
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cursor_position(),
+            (0, 79),
+            "cursor must be clamped to the margin, not 80"
+        );
+        assert!(row_is_empty(screen, 1, 80), "row 1 must remain empty");
+        assert_eq!(screen.cell(0, 78).unwrap().contents(), "あ");
+        assert!(
+            screen.cell(0, 79).unwrap().is_wide_continuation(),
+            "continuation cell must be set at the last column"
+        );
+    }
+
+    /// IRM insert mode (`CSI 4 h`): a printable written at the cursor shifts the
+    /// rest of the row right instead of overwriting. pico uses this to insert
+    /// characters mid-line.
+    #[test]
+    fn insert_mode_shifts_row_right() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"hello");
+        // Move to col 1 (0-based) and enable insert mode.
+        parser.process(b"\x1b[1;2H\x1b[4h");
+        parser.process(b"X");
+        parser.process(b"\x1b[4l");
+
+        let screen = parser.screen();
+        assert_eq!(screen.cell(0, 0).unwrap().contents(), "h");
+        assert_eq!(
+            screen.cell(0, 1).unwrap().contents(),
+            "X",
+            "inserted char"
+        );
+        assert_eq!(
+            screen.cell(0, 2).unwrap().contents(),
+            "e",
+            "original shifted right"
+        );
+        assert_eq!(screen.cell(0, 3).unwrap().contents(), "l");
+        assert_eq!(screen.cell(0, 4).unwrap().contents(), "l");
+        assert_eq!(
+            screen.cell(0, 5).unwrap().contents(),
+            "o",
+            "row tail preserved"
+        );
+    }
+
+    /// Without IRM (default), a printable overwrites the cell at the cursor.
+    #[test]
+    fn no_insert_mode_overwrites() {
+        let mut parser = Parser::new(24, 80, 0);
+        parser.process(b"hello");
+        parser.process(b"\x1b[1;2H");
+        parser.process(b"X");
+
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cell(0, 1).unwrap().contents(),
+            "X",
+            "overwrote col 1"
+        );
+        assert_eq!(screen.cell(0, 2).unwrap().contents(), "l", "not shifted");
     }
 }

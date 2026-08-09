@@ -159,7 +159,9 @@ where
     let s = match color {
         term_wm_vt100::Color::Default => unreachable!(),
         term_wm_vt100::Color::Idx(n) => format!("{n}"),
-        term_wm_vt100::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        term_wm_vt100::Color::Rgb(r, g, b) => {
+            format!("#{r:02x}{g:02x}{b:02x}")
+        }
     };
     serializer.serialize_str(&s)
 }

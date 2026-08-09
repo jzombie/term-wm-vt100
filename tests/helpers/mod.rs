@@ -83,7 +83,10 @@ pub fn compare_screens(
     }
     is!(
         Bytes(&got.contents_diff(term_wm_vt100::Parser::default().screen())),
-        Bytes(&expected.contents_diff(term_wm_vt100::Parser::default().screen()))
+        Bytes(
+            &expected
+                .contents_diff(term_wm_vt100::Parser::default().screen())
+        )
     );
 
     is!(Bytes(&got.contents_diff(got)), Bytes(b""));
@@ -127,7 +130,9 @@ pub fn rows_formatted_reproduces_state(input: &[u8]) -> bool {
     rows_formatted_reproduces_screen(parser.screen())
 }
 
-pub fn contents_formatted_reproduces_screen(screen: &term_wm_vt100::Screen) -> bool {
+pub fn contents_formatted_reproduces_screen(
+    screen: &term_wm_vt100::Screen,
+) -> bool {
     let mut new_input = screen.contents_formatted();
     new_input.extend(screen.input_mode_formatted());
     assert_eq!(new_input, screen.state_formatted());
@@ -138,7 +143,9 @@ pub fn contents_formatted_reproduces_screen(screen: &term_wm_vt100::Screen) -> b
     compare_screens(&got_screen, screen)
 }
 
-pub fn rows_formatted_reproduces_screen(screen: &term_wm_vt100::Screen) -> bool {
+pub fn rows_formatted_reproduces_screen(
+    screen: &term_wm_vt100::Screen,
+) -> bool {
     let mut new_input = vec![];
     let mut wrapped = false;
     for (idx, row) in screen.rows_formatted(0, 80).enumerate() {

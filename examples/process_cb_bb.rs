@@ -10,7 +10,11 @@ impl term_wm_vt100::Callbacks for Callbacks {
         std::hint::black_box(screen);
     }
 
-    fn resize(&mut self, screen: &mut term_wm_vt100::Screen, request: (u16, u16)) {
+    fn resize(
+        &mut self,
+        screen: &mut term_wm_vt100::Screen,
+        request: (u16, u16),
+    ) {
         std::hint::black_box((screen, request));
     }
 
@@ -22,15 +26,27 @@ impl term_wm_vt100::Callbacks for Callbacks {
         std::hint::black_box((screen, icon_name));
     }
 
-    fn set_window_title(&mut self, screen: &mut term_wm_vt100::Screen, title: &[u8]) {
+    fn set_window_title(
+        &mut self,
+        screen: &mut term_wm_vt100::Screen,
+        title: &[u8],
+    ) {
         std::hint::black_box((screen, title));
     }
 
-    fn unhandled_char(&mut self, screen: &mut term_wm_vt100::Screen, c: char) {
+    fn unhandled_char(
+        &mut self,
+        screen: &mut term_wm_vt100::Screen,
+        c: char,
+    ) {
         std::hint::black_box((screen, c));
     }
 
-    fn unhandled_control(&mut self, screen: &mut term_wm_vt100::Screen, b: u8) {
+    fn unhandled_control(
+        &mut self,
+        screen: &mut term_wm_vt100::Screen,
+        b: u8,
+    ) {
         std::hint::black_box((screen, b));
     }
 
@@ -76,7 +92,8 @@ fn read_frames() -> impl Iterator<Item = Vec<u8>> {
 }
 
 fn process_frames(frames: &[Vec<u8>]) {
-    let mut parser = term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, Callbacks);
+    let mut parser =
+        term_wm_vt100::Parser::new_with_callbacks(24, 80, 0, Callbacks);
     for frame in frames {
         parser.process(frame);
     }
