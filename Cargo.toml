@@ -8,7 +8,7 @@ authors = [
 edition = "2021"
 rust-version = "1.70"
 
-description = "Fork of vt100 adding grid reflow on terminal resize for term-wm"
+description = "Fork of vt100 specifically for usage in term-wm"
 repository = "https://github.com/jzombie/term-wm-vt100"
 readme = "README.md"
 keywords = ["terminal", "vt100"]
