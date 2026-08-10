@@ -74,11 +74,44 @@ impl Grid {
             return;
         }
 
+        let old_rows = self.size.rows;
+        let new_rows = size.rows;
+
         if self.scroll_bottom == self.size.rows - 1 {
             self.scroll_bottom = size.rows - 1;
         }
 
         self.size = size;
+
+        // History pull-down on vertical grow: reveal the most recent scrollback
+        // rows at the top of the grid instead of padding blank rows at the
+        // bottom, keeping the cursor/prompt bottom-anchored (mirrors the shrink
+        // path's ESC[S scroll-up). Only while following the tail AND the cursor
+        // rests on the bottom edge — pulling otherwise would shove a top-anchored
+        // prompt down into blanks and, across grow/shrink oscillations, multiply
+        // blank lines into the scrollback. The alternate screen auto-bypasses
+        // because its scrollback is always empty.
+        if new_rows > old_rows
+            && self.scrollback_offset == 0
+            && !self.scrollback.is_empty()
+            && self.pos.row >= old_rows.saturating_sub(1)
+        {
+            let pull =
+                usize::from(new_rows - old_rows).min(self.scrollback.len());
+            // split_off preserves chronological order (the tail of the scrollback
+            // is the most recent history, adjacent to the old grid's first row).
+            // A `pop_back` loop would yield newest→oldest and display the
+            // revealed history upside-down — do NOT use it.
+            let split_at = self.scrollback.len() - pull;
+            let pulled: Vec<_> =
+                self.scrollback.split_off(split_at).into_iter().collect();
+            self.rows.splice(0..0, pulled);
+            // pull <= new_rows - old_rows, both u16, so this never truncates.
+            let pull_u16 = u16::try_from(pull).unwrap_or(u16::MAX);
+            self.pos.row = self.pos.row.saturating_add(pull_u16);
+            self.saved_pos.row = self.saved_pos.row.saturating_add(pull_u16);
+        }
+
         for row in &mut self.rows {
             row.resize(size.cols, crate::Cell::new());
         }
@@ -384,7 +417,38 @@ impl Grid {
 
         // Reassemble the scrollback and visible rows.
         self.scrollback = all_new[..hold].to_vec().into();
-        self.rows = all_new[hold..].to_vec();
+        let mut visible: Vec<crate::row::Row> = all_new[hold..].to_vec();
+
+        // Bottom-anchor short content: when the screen grows TALLER and the
+        // cursor was resting on a non-blank (prompt) row at the old bottom while
+        // tail-following, keep the prompt at the new bottom by padding blanks
+        // ABOVE instead of stranding it mid-screen with blanks below (the
+        // shell's SIGWINCH redraw would draw the prompt at the new bottom,
+        // leaving the old prompt stranded in whitespace). A cursor parked on an
+        // empty row keeps the legacy clamp behavior; width-only reflows leave
+        // content top-anchored.
+        if new_size.rows > old_rows
+            && old_scrollback_offset == 0
+            && !cursor_row_blank
+            && old_pos.row >= old_rows.saturating_sub(1)
+            && visible.len() < new_rows
+        {
+            let pad = new_rows - visible.len();
+            let mut padded = Vec::with_capacity(new_rows);
+            padded.resize(pad, crate::row::Row::new(new_cols));
+            padded.extend(visible);
+            visible = padded;
+
+            // Shift the resolved cursors down by exactly the rows added above
+            // so they stay pinned to the text they were sitting on (do NOT
+            // hardcode the absolute bottom row — line de-wrapping can leave the
+            // cursor above the content end).
+            let pad_u16 = u16::try_from(pad).unwrap_or(u16::MAX);
+            self.pos.row = self.pos.row.saturating_add(pad_u16);
+            self.saved_pos.row = self.saved_pos.row.saturating_add(pad_u16);
+        }
+
+        self.rows = visible;
         while self.rows.len() < new_rows {
             self.rows.push(crate::row::Row::new(new_cols));
         }
