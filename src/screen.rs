@@ -1677,4 +1677,132 @@ mod tests {
         );
         assert_eq!(screen.cell(0, 2).unwrap().contents(), "l", "not shifted");
     }
+
+    // ── History pull-down on vertical grow ──
+
+    /// Growing the terminal vertically reveals the most recent scrollback rows
+    /// at the top (in chronological order) instead of padding blank rows at the
+    /// bottom, keeping the cursor/prompt anchored to the bottom.
+    #[test]
+    fn grow_pulls_history_into_grid() {
+        let mut parser = Parser::new(3, 10, 100);
+        parser.process(b"A\r\nB\r\nC");
+        parser.screen_mut().su(2); // push rows A,B into scrollback
+        {
+            let screen = parser.screen();
+            assert_eq!(screen.cell(0, 0).unwrap().contents(), "C");
+            assert_eq!(screen.scrollback(), 0, "at the tail");
+        }
+
+        parser.screen_mut().set_size(5, 10); // grow 2 rows, cols unchanged
+        let screen = parser.screen();
+        // Pulled history appears chronologically at the top.
+        assert_eq!(screen.cell(0, 0).unwrap().contents(), "A");
+        assert_eq!(screen.cell(1, 0).unwrap().contents(), "B");
+        assert_eq!(screen.cell(2, 0).unwrap().contents(), "C");
+        assert_eq!(screen.scrollback(), 0, "still following the tail");
+        assert_eq!(
+            screen.cursor_position().0,
+            4,
+            "cursor anchored to the bottom"
+        );
+    }
+
+    /// With no history to pull, growth stays top-anchored and pads blanks below.
+    #[test]
+    fn grow_without_scrollback_pads_blanks() {
+        let mut parser = Parser::new(3, 10, 0); // no scrollback capacity
+        parser.process(b"A\r\nB\r\nC");
+        assert_eq!(parser.screen().scrollback(), 0);
+
+        parser.screen_mut().set_size(5, 10);
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cell(0, 0).unwrap().contents(),
+            "A",
+            "top-anchored"
+        );
+        assert_eq!(screen.cell(1, 0).unwrap().contents(), "B");
+        assert_eq!(screen.cell(2, 0).unwrap().contents(), "C");
+        assert!(row_is_empty(screen, 3, 10), "blank rows padded below");
+        assert!(row_is_empty(screen, 4, 10), "blank rows padded below");
+    }
+
+    /// The pull is bounded by how much history actually exists.
+    #[test]
+    fn grow_pull_is_bounded_by_history() {
+        let mut parser = Parser::new(3, 10, 100);
+        parser.process(b"A\r\nB\r\nC");
+        parser.screen_mut().su(1); // 1 row (A) in history
+        assert_eq!(parser.screen().scrollback(), 0);
+
+        parser.screen_mut().set_size(8, 10); // grow by 5, only 1 row of history
+        let screen = parser.screen();
+        assert_eq!(screen.cell(0, 0).unwrap().contents(), "A", "pulled line");
+        assert_eq!(screen.cell(1, 0).unwrap().contents(), "B");
+        assert_eq!(screen.cell(2, 0).unwrap().contents(), "C");
+        assert!(row_is_empty(screen, 3, 10), "remainder padded blank");
+        assert!(row_is_empty(screen, 7, 10), "remainder padded blank");
+    }
+
+    /// A scrolled-up view is left top-anchored: no pull-down.
+    #[test]
+    fn scrolled_up_grow_does_not_pull() {
+        let mut parser = Parser::new(3, 10, 100);
+        parser.process(b"A\r\nB\r\nC");
+        parser.screen_mut().su(2); // scrollback=[A,B], grid=[C,_,_]
+        parser.screen_mut().set_scrollback(2); // viewport scrolled up
+        let first_before =
+            parser.screen().cell(0, 0).unwrap().contents().to_string();
+        assert_eq!(
+            parser.screen().scrollback(),
+            2,
+            "viewport is scrolled up"
+        );
+
+        parser.screen_mut().set_size(5, 10);
+        let screen = parser.screen();
+        assert_eq!(
+            screen.scrollback(),
+            2,
+            "scroll offset preserved, no pull"
+        );
+        assert_eq!(
+            screen.cell(0, 0).unwrap().contents(),
+            first_before,
+            "top-anchored: first visible row unchanged"
+        );
+    }
+
+    /// Growing while the cursor is NOT at the bottom edge must not pull history
+    /// (a top-anchored prompt stays put; the grid pads blanks below). This is
+    /// what prevents the grow/shrink blank-multiplication loop.
+    #[test]
+    fn grow_cursor_not_at_bottom_does_not_pull() {
+        let mut parser = Parser::new(3, 10, 100);
+        parser.process(b"A\r\nB\r\nC");
+        parser.screen_mut().su(2); // scrollback=[A,B], grid=[C,_,_]
+        parser.process(b"\x1b[1;1H"); // move cursor to the top row
+        assert_eq!(
+            parser.screen().cursor_position().0,
+            0,
+            "cursor near the top"
+        );
+
+        parser.screen_mut().set_size(5, 10); // grow 2 rows
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cell(0, 0).unwrap().contents(),
+            "C",
+            "top-anchored: no history pulled above the prompt"
+        );
+        assert_eq!(
+            screen.cell(1, 0).unwrap().contents(),
+            "",
+            "blank row below"
+        );
+        assert!(row_is_empty(screen, 1, 10), "blanks padded below");
+        assert!(row_is_empty(screen, 4, 10), "blanks padded below");
+        assert_eq!(screen.cursor_position().0, 0, "cursor left where it was");
+    }
 }

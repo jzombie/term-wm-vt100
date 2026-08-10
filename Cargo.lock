@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-vt100"
-version = "0.16.2-patch2"
+version = "0.16.2-patch3"
 dependencies = [
  "crossterm",
  "itoa",

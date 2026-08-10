@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.2-patch3] - 2026-08-09
+
+### Fixed
+
+* Growing the terminal vertically while following the tail now reveals the most recent
+  scrollback rows at the top of the grid instead of padding blank rows at the bottom, keeping
+  the cursor/prompt bottom-anchored (mirrors the shrink path's `ESC[S` scroll-up). The pull
+  only runs when the cursor rests on the old bottom edge — a top-anchored prompt stays put —
+  so repeated grow/shrink oscillations no longer multiply blank lines into the scrollback.
+* A width+height grow that reflows content shorter than the new screen now bottom-anchors the
+  prompt when the cursor was on the old bottom row (blanks padded above instead of stranded
+  mid-screen with blanks below).
+
 ## [0.16.2-patch2] - 2026-08-08
 
 ### Added

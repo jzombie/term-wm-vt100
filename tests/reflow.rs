@@ -291,3 +291,44 @@ fn test_zsh_sigwinch_prompt_duplication_behavior() {
         contents
     );
 }
+
+/// Growing the terminal (width + height → reflow) with short content and the
+/// cursor resting on the old bottom row must bottom-anchor: the prompt stays at
+/// the new bottom with blanks above, instead of stranding mid-screen with a
+/// blank gap below it.
+#[test]
+fn grow_bottom_anchors_short_content_when_cursor_at_bottom() {
+    let mut p = term_wm_vt100::Parser::new(3, 10, 100);
+    p.process(b"a\r\nb\r\nc"); // cursor at bottom row (2), no scrollback
+    assert_eq!(p.screen().cursor_position().0, 2);
+    p.screen_mut().set_size(6, 12); // width + height grow → reflow, short content
+    let screen = p.screen();
+    assert_eq!(
+        screen.cursor_position().0,
+        5,
+        "prompt stays at the new bottom when it was at the old bottom"
+    );
+    assert_eq!(
+        screen.cell(5, 0).unwrap().contents(),
+        "c",
+        "content contiguous at the bottom (no blank gap above the prompt)"
+    );
+}
+
+/// When the cursor is NOT at the bottom (a mostly-empty terminal), a grow must
+/// stay top-anchored and pad blanks below — the standard terminal behavior.
+#[test]
+fn grow_top_anchors_when_cursor_not_at_bottom() {
+    let mut p = term_wm_vt100::Parser::new(3, 10, 100);
+    p.process(b"a\r\nb\r\nc");
+    p.process(b"\x1b[1;1H"); // move cursor to the top row
+    assert_eq!(p.screen().cursor_position().0, 0);
+    p.screen_mut().set_size(6, 12);
+    let screen = p.screen();
+    assert_eq!(
+        screen.cursor_position().0,
+        0,
+        "top-anchored cursor stays with its content"
+    );
+    assert_eq!(screen.cell(0, 0).unwrap().contents(), "a");
+}
