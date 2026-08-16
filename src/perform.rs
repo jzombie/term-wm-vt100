@@ -209,6 +209,22 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
             [b"2", s] => {
                 self.callbacks.set_window_title(&mut self.screen, s);
             }
+            // OSC 8 hyperlinks: `8;<params>;<uri>` opens a link, `8;;` (empty
+            // uri) closes it. The `id=` params field is validated but not
+            // otherwise used.
+            [b"8", id_params, uri] => {
+                if id_params.is_empty() || id_params.starts_with(b"id=") {
+                    self.screen.set_active_hyperlink(
+                        std::str::from_utf8(uri).unwrap_or(""),
+                    );
+                } else {
+                    self.callbacks.unhandled_osc(&mut self.screen, params);
+                }
+            }
+            // OSC 7 working directory: `7;file://host/path`.
+            [b"7", uri] => {
+                self.screen.set_cwd(std::str::from_utf8(uri).unwrap_or(""));
+            }
             [b"52", ty, data] => {
                 match (
                     ty.iter().all(|c| CLIPBOARD_SELECTOR.contains(c)),

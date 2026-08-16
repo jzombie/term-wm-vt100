@@ -22,6 +22,7 @@ mod perform;
 mod row;
 mod screen;
 mod term;
+mod uri;
 
 pub use attrs::Color;
 pub use callbacks::Callbacks;

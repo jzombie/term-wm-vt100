@@ -1,7 +1,7 @@
 use unicode_width::UnicodeWidthChar as _;
 
 // chosen to make the size of the cell struct 32 bytes
-const CONTENT_BYTES: usize = 22;
+const CONTENT_BYTES: usize = 20;
 
 const IS_WIDE: u8 = 0b1000_0000;
 const IS_WIDE_CONTINUATION: u8 = 0b0100_0000;
@@ -12,6 +12,9 @@ const LEN_BITS: u8 = 0b0001_1111;
 pub struct Cell {
     contents: [u8; CONTENT_BYTES],
     len: u8,
+    /// Index into the [`Screen`](crate::Screen)'s hyperlink URI table, `0`
+    /// when the cell carries no hyperlink.
+    hyperlink: u16,
     attrs: crate::attrs::Attrs,
 }
 const _: () = assert!(std::mem::size_of::<Cell>() == 32);
@@ -34,6 +37,7 @@ impl Cell {
         Self {
             contents: Default::default(),
             len: 0,
+            hyperlink: 0,
             attrs: crate::attrs::Attrs::default(),
         }
     }
@@ -76,6 +80,19 @@ impl Cell {
     pub(crate) fn clear(&mut self, attrs: crate::attrs::Attrs) {
         self.len = 0;
         self.attrs = attrs;
+        self.hyperlink = 0;
+    }
+
+    pub(crate) fn set_hyperlink(&mut self, id: u16) {
+        self.hyperlink = id;
+    }
+
+    /// Returns the index of the cell's hyperlink in the
+    /// [`Screen`](crate::Screen)'s URI table, or `0` when the cell has no
+    /// hyperlink.
+    #[must_use]
+    pub fn hyperlink_id(&self) -> u16 {
+        self.hyperlink
     }
 
     /// Returns the text contents of the cell.

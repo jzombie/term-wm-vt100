@@ -68,6 +68,18 @@ pub struct Screen {
     modes: u8,
     mouse_protocol_mode: MouseProtocolMode,
     mouse_protocol_encoding: MouseProtocolEncoding,
+
+    /// The currently active OSC 8 hyperlink (0 = none); stamped onto every
+    /// cell written while it is active.
+    hyperlink_id: u16,
+    /// URI table indexed by `hyperlink_id` (index 0 is unused). A single
+    /// entry is shared by every cell carrying the same hyperlink.
+    hyperlink_table: Vec<std::sync::Arc<str>>,
+    /// Dedupe map for [`hyperlink_table`](Self::hyperlink_table).
+    hyperlink_map: std::collections::HashMap<std::sync::Arc<str>, u16>,
+    /// The pane's current working directory as a decoded absolute filesystem
+    /// path (from OSC 7), used to canonicalize relative OSC 8 targets.
+    cwd: Option<String>,
 }
 
 impl Screen {
@@ -87,6 +99,11 @@ impl Screen {
             modes: MODE_AUTOWRAP,
             mouse_protocol_mode: MouseProtocolMode::default(),
             mouse_protocol_encoding: MouseProtocolEncoding::default(),
+
+            hyperlink_id: 0,
+            hyperlink_table: Vec::new(),
+            hyperlink_map: std::collections::HashMap::new(),
+            cwd: None,
         }
     }
 
@@ -547,6 +564,74 @@ impl Screen {
         self.grid().visible_cell(crate::grid::Pos { row, col })
     }
 
+    /// Returns the canonical OSC 8 hyperlink URI for the cell at the given
+    /// location, if any.
+    ///
+    /// Uses the same row/column indexing (including the scrollback offset) as
+    /// [`cell`](Self::cell).
+    #[must_use]
+    pub fn hyperlink(&self, row: u16, col: u16) -> Option<std::sync::Arc<str>> {
+        let id = self
+            .grid()
+            .visible_cell(crate::grid::Pos { row, col })?
+            .hyperlink_id();
+        if id == 0 {
+            None
+        } else {
+            self.hyperlink_table
+                .get(usize::from(id) - 1)
+                .cloned()
+        }
+    }
+
+    /// Returns the pane's current working directory as a percent-encoded
+    /// `file://` URI (from OSC 7), if one has been reported.
+    #[must_use]
+    pub fn cwd(&self) -> Option<String> {
+        self.cwd.as_ref().map(|p| {
+            format!("file://{}", crate::uri::percent_encode_path(p))
+        })
+    }
+
+    /// Seeds the pane's working directory from a raw filesystem path (e.g.
+    /// the PTY spawn directory) so relative OSC 8 targets resolve before any
+    /// program reports OSC 7.
+    pub fn set_initial_cwd(&mut self, path: &str) {
+        if path.starts_with('/') && self.cwd.is_none() {
+            self.cwd = Some(path.to_string());
+        }
+    }
+
+    /// Sets the active OSC 8 hyperlink from a raw URI (canonicalized against
+    /// the pane's cwd). An empty or unresolvable URI closes the active link.
+    pub(crate) fn set_active_hyperlink(&mut self, raw_uri: &str) {
+        match crate::uri::canonicalize_uri(raw_uri, self.cwd.as_deref()) {
+            Some(uri) if !uri.is_empty() => {
+                let uri: std::sync::Arc<str> = std::sync::Arc::from(uri.as_str());
+                let id = if let Some(id) = self.hyperlink_map.get(&uri) {
+                    *id
+                } else {
+                    let id = u16::try_from(self.hyperlink_table.len() + 1)
+                        .unwrap_or(u16::MAX);
+                    if id != u16::MAX {
+                        self.hyperlink_table.push(uri.clone());
+                        self.hyperlink_map.insert(uri, id);
+                    }
+                    id
+                };
+                self.hyperlink_id = id;
+            }
+            _ => self.hyperlink_id = 0,
+        }
+    }
+
+    /// Records the pane's working directory from an OSC 7 URI.
+    pub(crate) fn set_cwd(&mut self, raw_uri: &str) {
+        if let Some(path) = crate::uri::cwd_uri_to_path(raw_uri) {
+            self.cwd = Some(path);
+        }
+    }
+
     /// Returns whether the text in row `row` should wrap to the next line.
     #[must_use]
     pub fn row_wrapped(&self, row: u16) -> bool {
@@ -713,11 +798,17 @@ impl Screen {
     }
 }
 
+/// Stamp a just-written cell with an OSC 8 hyperlink id (`0` = none).
+fn link_cell(cell: &mut crate::Cell, link: u16) {
+    cell.set_hyperlink(link);
+}
+
 impl Screen {
     pub(crate) fn text(&mut self, c: char) {
         let pos = self.grid().pos();
         let size = self.grid().size();
         let attrs = self.attrs;
+        let link = self.hyperlink_id;
 
         let width = c.width();
         if width.is_none() && (u32::from(c)) < 256 {
@@ -808,6 +899,7 @@ impl Screen {
                         .unwrap();
                 }
                 prev_cell.append(c);
+                link_cell(prev_cell, link);
             } else if pos.row > 0 {
                 let prev_row = self
                     .grid()
@@ -848,6 +940,7 @@ impl Screen {
                             .unwrap();
                     }
                     prev_cell.append(c);
+                    link_cell(prev_cell, link);
                 }
             }
         } else {
@@ -903,6 +996,7 @@ impl Screen {
                     // wide character after it.
                     .unwrap();
                 next_cell.set(' ', attrs);
+                link_cell(next_cell, link);
             }
 
             if self.mode(MODE_INSERT) && pos.col < size.cols {
@@ -921,6 +1015,7 @@ impl Screen {
                 // that self.grid().pos().col has a valid value.
                 .unwrap();
             cell.set(c, attrs);
+            link_cell(cell, link);
             if self.mode(MODE_AUTOWRAP) {
                 self.grid_mut().col_inc(1);
             } else {
@@ -984,6 +1079,7 @@ impl Screen {
                     .unwrap();
                 next_cell.clear(crate::attrs::Attrs::default());
                 next_cell.set_wide_continuation(true);
+                link_cell(next_cell, link);
                 if self.mode(MODE_AUTOWRAP) {
                     self.grid_mut().col_inc(1);
                 } else {

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* OSC 8 hyperlink support: `8;<params>;<uri>` (and the `8;;` close) is parsed and each
+  written cell is stamped with a `u16` index into the screen's URI table. New API:
+  `Screen::hyperlink(row, col)` resolves the canonical URI for any cell (including
+  scrollback), so host terminals (Zed, Ghostty, VS Code) receive clickable links instead
+  of the sequence being dropped at `unhandled_osc`.
+* OSC 7 working-directory support: `7;file://...` is captured and exposed via
+  `Screen::cwd()`. `Screen::set_initial_cwd` / `Parser::set_initial_cwd` seed a spawn
+  directory so relative targets resolve before any program reports OSC 7.
+* URI canonicalization at the parser boundary: schemeless/relative OSC 8 targets are
+  resolved against the pane's cwd to canonical `file:///` URIs, and all path components
+  are RFC 3986 percent-encoded (spaces, `#`, `?`, non-ASCII, ...). Unresolvable relative
+  targets are dropped rather than emitted malformed.
+* The `Cell` layout packs a `hyperlink: u16` (0 = none) field by reducing `CONTENT_BYTES`
+  from 22 to 20, keeping `size_of::<Cell>() == 32`; identical URIs dedupe to one table
+  entry (65,535 unique links per screen).
+
 ## [0.16.2-patch3] - 2026-08-09
 
 ### Fixed

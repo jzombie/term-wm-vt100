@@ -75,6 +75,13 @@ impl<CB: crate::callbacks::Callbacks> Parser<CB> {
     pub fn callbacks_mut(&mut self) -> &mut CB {
         &mut self.screen.callbacks
     }
+
+    /// Seeds the terminal's working directory from a raw filesystem path
+    /// (e.g. the PTY spawn directory) so relative OSC 8 hyperlink targets
+    /// resolve before any program reports OSC 7.
+    pub fn set_initial_cwd(&mut self, path: &str) {
+        self.screen.screen.set_initial_cwd(path);
+    }
 }
 
 impl Default for Parser {
