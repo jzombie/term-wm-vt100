@@ -654,6 +654,10 @@ impl Screen {
 
     /// Return the visible row at `row` without re-evaluating the
     /// scrollback chain for every column.
+<<<<<<< HEAD
+=======
+    #[must_use]
+>>>>>>> main
     pub fn visible_row(&self, row: u16) -> Option<&crate::row::Row> {
         self.grid().visible_row(row)
     }
@@ -1810,5 +1814,67 @@ mod tests {
         assert!(row_is_empty(screen, 1, 10), "blanks padded below");
         assert!(row_is_empty(screen, 4, 10), "blanks padded below");
         assert_eq!(screen.cursor_position().0, 0, "cursor left where it was");
+    }
+
+    // ── visible_row ──
+
+    /// Row 0 returns the first visible row; row 1 the second, etc.
+    #[test]
+    fn visible_row_returns_matching_row() {
+        let mut parser = Parser::new(3, 10, 0);
+        parser.process(b"A\r\nB\r\nC");
+        let screen = parser.screen();
+        assert_eq!(
+            screen.visible_row(0).unwrap().get(0).unwrap().contents(),
+            "A"
+        );
+        assert_eq!(
+            screen.visible_row(1).unwrap().get(0).unwrap().contents(),
+            "B"
+        );
+        assert_eq!(
+            screen.visible_row(2).unwrap().get(0).unwrap().contents(),
+            "C"
+        );
+    }
+
+    /// Requesting a row index beyond the terminal height returns None.
+    #[test]
+    fn visible_row_out_of_bounds_returns_none() {
+        let mut parser = Parser::new(2, 10, 0);
+        parser.process(b"A\r\nB");
+        assert!(parser.screen().visible_row(2).is_none());
+        assert!(parser.screen().visible_row(100).is_none());
+    }
+
+    /// With scrollback, `visible_row(0)` still refers to the topmost visible
+    /// row in the viewport, not the scrollback history.
+    #[test]
+    fn visible_row_with_scrollback() {
+        let mut parser = Parser::new(2, 10, 100);
+        parser.process(b"A\r\nB\r\nC");
+        // A pushed to scrollback, visible grid = [B, C]
+        let screen = parser.screen();
+        assert_eq!(
+            screen.visible_row(0).unwrap().get(0).unwrap().contents(),
+            "B"
+        );
+        assert_eq!(
+            screen.visible_row(1).unwrap().get(0).unwrap().contents(),
+            "C"
+        );
+    }
+
+    /// `visible_row` returns a populated row for cells that have been written.
+    #[test]
+    fn visible_row_preserves_cell_contents() {
+        let mut parser = Parser::new(2, 5, 0);
+        parser.process(b"hello");
+        let row = parser.screen().visible_row(0).unwrap();
+        assert_eq!(row.get(0).unwrap().contents(), "h");
+        assert_eq!(row.get(1).unwrap().contents(), "e");
+        assert_eq!(row.get(2).unwrap().contents(), "l");
+        assert_eq!(row.get(3).unwrap().contents(), "l");
+        assert_eq!(row.get(4).unwrap().contents(), "o");
     }
 }
