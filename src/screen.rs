@@ -652,6 +652,12 @@ impl Screen {
         }
     }
 
+    /// Return the visible row at `row` without re-evaluating the
+    /// scrollback chain for every column.
+    pub fn visible_row(&self, row: u16) -> Option<&crate::row::Row> {
+        self.grid().visible_row(row)
+    }
+
     fn grid_mut(&mut self) -> &mut crate::grid::Grid {
         if self.mode(MODE_ALTERNATE_SCREEN) {
             &mut self.alternate_grid
