@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.16.2-patch4] - 2026-08-20
+
+### Added
+
+* `Screen::visible_row(row)` — public accessor for a single visible row (`Option<&Row>`).
+
 ## [0.16.2-patch3] - 2026-08-09
 
 ### Fixed
