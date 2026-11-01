@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.2-patch6] - 2026-11-01
+
+### Changed
+
+* Bumped dependencies (`Cargo.lock` only, no API changes):
+  * `serde` from 1.0.219 to 1.0.229 (splits out new `serde_core` 1.0.229;
+    `serde_derive` 1.0.219 → 1.0.229, now built against new `syn` 3.0.9)
+
 ## [0.16.2-patch5] - 2026-10-15
 
 ### Changed
