@@ -549,3 +549,55 @@ fn extend_itoa<I: itoa::Integer>(buf: &mut Vec<u8>, i: I) {
     let mut itoa_buf = itoa::Buffer::new();
     buf.extend_from_slice(itoa_buf.format(i).as_bytes());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attrs_with_default_background_emits_49() {
+        let mut buf = Vec::new();
+        Attrs::default()
+            .bgcolor(crate::Color::Default)
+            .write_buf(&mut buf);
+        assert_eq!(buf, b"\x1b[49m");
+    }
+
+    #[test]
+    fn move_right_covers_all_counts() {
+        let mut buf = Vec::new();
+        MoveRight::default().write_buf(&mut buf);
+        assert_eq!(buf, b"\x1b[C");
+
+        buf.clear();
+        MoveRight::new(0).write_buf(&mut buf);
+        assert_eq!(buf, Vec::<u8>::new());
+
+        buf.clear();
+        MoveRight::new(1).write_buf(&mut buf);
+        assert_eq!(buf, b"\x1b[C");
+
+        buf.clear();
+        MoveRight::new(5).write_buf(&mut buf);
+        assert_eq!(buf, b"\x1b[5C");
+    }
+
+    #[test]
+    fn erase_char_covers_all_counts() {
+        let mut buf = Vec::new();
+        EraseChar::default().write_buf(&mut buf);
+        assert_eq!(buf, b"\x1b[X");
+
+        buf.clear();
+        EraseChar::new(0).write_buf(&mut buf);
+        assert_eq!(buf, Vec::<u8>::new());
+
+        buf.clear();
+        EraseChar::new(1).write_buf(&mut buf);
+        assert_eq!(buf, b"\x1b[X");
+
+        buf.clear();
+        EraseChar::new(5).write_buf(&mut buf);
+        assert_eq!(buf, b"\x1b[5X");
+    }
+}
