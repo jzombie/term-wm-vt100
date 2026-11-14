@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.16.2-patch7] - 2026-11-14
+
+### Changed
+
+* Bumped dependencies (`Cargo.lock` only, no API changes):
+  * `itoa` from 1.0.18 to 1.0.19
+  * `serde_json` from 1.0.143 to 1.0.154
+  * `unicode-width` from 0.2.2 to 0.2.3
+
 ## [0.16.2-patch6] - 2026-11-01
 
 ### Changed
